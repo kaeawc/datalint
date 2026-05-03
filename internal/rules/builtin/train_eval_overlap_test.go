@@ -1,0 +1,85 @@
+package builtin_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/kaeawc/datalint/internal/config"
+	"github.com/kaeawc/datalint/internal/diag"
+	"github.com/kaeawc/datalint/internal/pipeline"
+	"github.com/kaeawc/datalint/internal/rules"
+	_ "github.com/kaeawc/datalint/internal/rules/builtin"
+	"github.com/kaeawc/datalint/internal/testutil"
+)
+
+const trainEvalOverlapRuleID = "train-eval-overlap"
+
+func TestTrainEvalOverlap_Positive(t *testing.T) {
+	train := testutil.Fixture(t, "train-eval-overlap/train.jsonl")
+	eval := testutil.Fixture(t, "train-eval-overlap/eval-positive.jsonl")
+
+	got := corpusFindingsForRule(t, &rules.CorpusContext{
+		Train: []string{train},
+		Eval:  []string{eval},
+	}, trainEvalOverlapRuleID)
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 findings, got %d: %s", len(got), joinMessages(got))
+	}
+	rows := []int{got[0].Location.Row, got[1].Location.Row}
+	wantRows := []int{2, 3}
+	if rows[0] != wantRows[0] || rows[1] != wantRows[1] {
+		t.Errorf("rows = %v, want %v", rows, wantRows)
+	}
+	for _, f := range got {
+		if !strings.Contains(f.Message, "train.jsonl") {
+			t.Errorf("message should cite the train path: %q", f.Message)
+		}
+	}
+}
+
+func TestTrainEvalOverlap_Clean(t *testing.T) {
+	train := testutil.Fixture(t, "train-eval-overlap/train.jsonl")
+	eval := testutil.Fixture(t, "train-eval-overlap/eval-clean.jsonl")
+
+	got := corpusFindingsForRule(t, &rules.CorpusContext{
+		Train: []string{train},
+		Eval:  []string{eval},
+	}, trainEvalOverlapRuleID)
+
+	if len(got) != 0 {
+		t.Fatalf("expected 0 findings, got %d: %s", len(got), joinMessages(got))
+	}
+}
+
+func TestTrainEvalOverlap_NoTrain(t *testing.T) {
+	eval := testutil.Fixture(t, "train-eval-overlap/eval-positive.jsonl")
+	got := corpusFindingsForRule(t, &rules.CorpusContext{
+		Eval: []string{eval},
+	}, trainEvalOverlapRuleID)
+	if len(got) != 0 {
+		t.Fatalf("rule should be a no-op with no train files: %d findings", len(got))
+	}
+}
+
+func TestTrainEvalOverlap_NoEval(t *testing.T) {
+	train := testutil.Fixture(t, "train-eval-overlap/train.jsonl")
+	got := corpusFindingsForRule(t, &rules.CorpusContext{
+		Train: []string{train},
+	}, trainEvalOverlapRuleID)
+	if len(got) != 0 {
+		t.Fatalf("rule should be a no-op with no eval files: %d findings", len(got))
+	}
+}
+
+func corpusFindingsForRule(t *testing.T, ctx *rules.CorpusContext, id string) []diag.Finding {
+	t.Helper()
+	all := pipeline.RunCorpus(ctx, config.Default())
+	var out []diag.Finding
+	for _, f := range all {
+		if f.RuleID == id {
+			out = append(out, f)
+		}
+	}
+	return out
+}

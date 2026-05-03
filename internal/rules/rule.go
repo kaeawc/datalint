@@ -63,24 +63,46 @@ type Context struct {
 	Python *scanner.PythonFile
 }
 
-// CheckFunc is the rule body. It emits Findings via the provided callback.
+// CheckFunc is the rule body for per-file rules. It emits Findings via
+// the provided callback.
 type CheckFunc func(ctx *Context, emit func(diag.Finding))
 
-// Rule is the unit of registration.
-type Rule struct {
-	ID         string
-	Category   Category
-	Severity   diag.Severity
-	Confidence Confidence
-	Fix        FixLevel
-	Needs      Capability
-	Check      CheckFunc
+// CorpusContext carries the cross-file inputs available to corpus-scope
+// rules. Train and Eval are the JSONL paths the user grouped under
+// `--train` / `--eval`. Either may be empty.
+type CorpusContext struct {
+	Train []string
+	Eval  []string
 }
 
+// CorpusCheckFunc runs once per datalint invocation against the full
+// corpus. Useful for cross-file rules: leakage, deduplication, and
+// anything else that needs to compare rows across files.
+type CorpusCheckFunc func(ctx *CorpusContext, emit func(diag.Finding))
+
+// Rule is the unit of registration. A rule provides exactly one of
+// Check (per-file) or CorpusCheck (corpus-scope); registering both
+// or neither is a programming error.
+type Rule struct {
+	ID          string
+	Category    Category
+	Severity    diag.Severity
+	Confidence  Confidence
+	Fix         FixLevel
+	Needs       Capability
+	Check       CheckFunc
+	CorpusCheck CorpusCheckFunc
+}
+
+// IsCorpusScope reports whether this rule expects the corpus dispatch
+// path rather than per-file.
+func (r *Rule) IsCorpusScope() bool { return r.CorpusCheck != nil }
+
 // AppliesTo reports whether the rule should run against the given file
-// based on its declared capabilities and the file's Kind.
+// based on its declared capabilities and the file's Kind. Corpus-scope
+// rules never apply per-file.
 func (r *Rule) AppliesTo(f *scanner.File) bool {
-	if f == nil {
+	if f == nil || r.IsCorpusScope() {
 		return false
 	}
 	switch f.Kind {
@@ -104,6 +126,9 @@ func Register(r *Rule) {
 	}
 	if _, exists := registry[r.ID]; exists {
 		panic(fmt.Sprintf("rules.Register: duplicate rule ID %q", r.ID))
+	}
+	if (r.Check == nil) == (r.CorpusCheck == nil) {
+		panic(fmt.Sprintf("rules.Register: rule %q must set exactly one of Check or CorpusCheck", r.ID))
 	}
 	registry[r.ID] = r
 }

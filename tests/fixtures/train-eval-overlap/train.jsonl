@@ -1,0 +1,4 @@
+{"prompt": "What is the capital of France?", "completion": "Paris"}
+{"prompt": "Define photosynthesis.", "completion": "..."}
+{"prompt": "Sort this list: 3, 1, 2", "completion": "1, 2, 3"}
+{"prompt": "  leading and trailing whitespace  ", "completion": "trim me"}
