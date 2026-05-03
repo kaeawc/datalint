@@ -56,8 +56,11 @@ const (
 func (c Capability) Has(want Capability) bool { return c&want == want }
 
 // Context is the per-file state passed to each rule's Check function.
+// Python is non-nil only when File.Kind == KindPythonSource and the
+// dispatcher succeeded in parsing the file.
 type Context struct {
-	File *scanner.File
+	File   *scanner.File
+	Python *scanner.PythonFile
 }
 
 // CheckFunc is the rule body. It emits Findings via the provided callback.
