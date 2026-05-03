@@ -17,14 +17,29 @@ func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
 
 	registered := rules.All()
 	for _, path := range paths {
-		file := scanner.Classify(path)
-		ctx := &rules.Context{File: file}
+		ctx := buildContext(path)
 		for _, rule := range registered {
-			if !rule.AppliesTo(file) {
+			if !rule.AppliesTo(ctx.File) {
 				continue
 			}
 			rule.Check(ctx, emit)
 		}
 	}
 	return findings, nil
+}
+
+// buildContext classifies the file and parses it eagerly when the
+// Kind needs project-supplied state (e.g. PythonFile). Parse and read
+// failures leave Python nil; rules that depend on it skip such files.
+// A future "file-unreadable" rule will surface these as findings
+// instead of silently dropping them.
+func buildContext(path string) *rules.Context {
+	file := scanner.Classify(path)
+	ctx := &rules.Context{File: file}
+	if file.Kind == scanner.KindPythonSource {
+		if py, err := scanner.ParsePython(path); err == nil {
+			ctx.Python = py
+		}
+	}
+	return ctx
 }
