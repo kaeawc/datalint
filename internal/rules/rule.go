@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/kaeawc/datalint/internal/diag"
+	"github.com/kaeawc/datalint/internal/scanner"
 )
 
 // Category groups rules by what they inspect.
@@ -51,10 +52,13 @@ const (
 	NeedsExternalEvalSet
 )
 
-// Context is the per-run state passed to each rule's Check function.
-// The skeleton keeps it empty; the dispatcher fills it in once scanner
-// and indexes exist.
-type Context struct{}
+// Has reports whether c contains every bit in want.
+func (c Capability) Has(want Capability) bool { return c&want == want }
+
+// Context is the per-file state passed to each rule's Check function.
+type Context struct {
+	File *scanner.File
+}
 
 // CheckFunc is the rule body. It emits Findings via the provided callback.
 type CheckFunc func(ctx *Context, emit func(diag.Finding))
@@ -68,6 +72,23 @@ type Rule struct {
 	Fix        FixLevel
 	Needs      Capability
 	Check      CheckFunc
+}
+
+// AppliesTo reports whether the rule should run against the given file
+// based on its declared capabilities and the file's Kind.
+func (r *Rule) AppliesTo(f *scanner.File) bool {
+	if f == nil {
+		return false
+	}
+	switch f.Kind {
+	case scanner.KindJSONL:
+		return r.Needs.Has(NeedsJSONL)
+	case scanner.KindPythonSource:
+		return r.Needs.Has(NeedsPythonAST)
+	case scanner.KindParquet:
+		return r.Needs.Has(NeedsParquet)
+	}
+	return false
 }
 
 var registry = map[string]*Rule{}

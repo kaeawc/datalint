@@ -3,8 +3,13 @@
 package builtin
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
 	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/rules"
+	"github.com/kaeawc/datalint/internal/scanner"
 )
 
 func init() {
@@ -19,7 +24,38 @@ func init() {
 	})
 }
 
-func checkJSONLMalformed(_ *rules.Context, _ func(diag.Finding)) {
-	// TODO: stream the JSONL file via internal/scanner, emit one
-	// Finding per non-parseable line with the offending row index.
+func checkJSONLMalformed(ctx *rules.Context, emit func(diag.Finding)) {
+	if ctx == nil || ctx.File == nil || ctx.File.Kind != scanner.KindJSONL {
+		return
+	}
+	path := ctx.File.Path
+	err := scanner.StreamJSONL(path, func(row int, line []byte) error {
+		if len(bytes.TrimSpace(line)) == 0 {
+			emit(diag.Finding{
+				RuleID:   "jsonl-malformed-line",
+				Severity: diag.SeverityError,
+				Message:  "blank line in JSONL",
+				Location: diag.Location{Path: path, Row: row},
+			})
+			return nil
+		}
+		var v any
+		if jsonErr := json.Unmarshal(line, &v); jsonErr != nil {
+			emit(diag.Finding{
+				RuleID:   "jsonl-malformed-line",
+				Severity: diag.SeverityError,
+				Message:  fmt.Sprintf("invalid JSON: %v", jsonErr),
+				Location: diag.Location{Path: path, Row: row},
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		emit(diag.Finding{
+			RuleID:   "jsonl-malformed-line",
+			Severity: diag.SeverityError,
+			Message:  fmt.Sprintf("read error: %v", err),
+			Location: diag.Location{Path: path},
+		})
+	}
 }
