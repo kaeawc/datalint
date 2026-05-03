@@ -10,7 +10,7 @@ import (
 	"github.com/kaeawc/datalint/internal/scanner"
 )
 
-// Run analyzes the given paths against every registered rule.
+// Run analyzes the given paths against every per-file registered rule.
 func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
 	var findings []diag.Finding
 	emit := func(f diag.Finding) { findings = append(findings, f) }
@@ -26,6 +26,24 @@ func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
 		}
 	}
 	return findings, nil
+}
+
+// RunCorpus runs every corpus-scope rule once against the supplied
+// CorpusContext. Returns nil findings when no corpus-scope rules are
+// registered or the context has no train/eval input.
+func RunCorpus(corpus *rules.CorpusContext, _ config.Config) []diag.Finding {
+	if corpus == nil || (len(corpus.Train) == 0 && len(corpus.Eval) == 0) {
+		return nil
+	}
+	var findings []diag.Finding
+	emit := func(f diag.Finding) { findings = append(findings, f) }
+	for _, rule := range rules.All() {
+		if !rule.IsCorpusScope() {
+			continue
+		}
+		rule.CorpusCheck(corpus, emit)
+	}
+	return findings
 }
 
 // buildContext classifies the file and parses it eagerly when the
