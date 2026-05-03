@@ -13,7 +13,6 @@ import (
 
 const fieldTypeRuleID = "field-type-mixed-across-rows"
 
-
 func TestFieldTypeMixed_Positive(t *testing.T) {
 	path := testutil.Fixture(t, "field-type-mixed-across-rows/positive.jsonl")
 	got := findingsForRule(t, path, fieldTypeRuleID)

@@ -56,34 +56,8 @@ func checkFieldTypeMixed(ctx *rules.Context, emit func(diag.Finding)) {
 	path := ctx.File.Path
 
 	stats := map[string]*fieldStat{}
-
 	err := scanner.StreamJSONL(path, func(row int, line []byte) error {
-		if len(line) == 0 {
-			return nil
-		}
-		var obj map[string]any
-		if err := json.Unmarshal(line, &obj); err != nil {
-			// jsonl-malformed-line owns parse errors.
-			return nil
-		}
-		for k, v := range obj {
-			tag := jsonTypeOf(v)
-			if tag == "" {
-				continue
-			}
-			s, ok := stats[k]
-			if !ok {
-				s = &fieldStat{
-					counts:   map[string]int{},
-					firstRow: map[string]int{},
-				}
-				stats[k] = s
-			}
-			s.counts[tag]++
-			if _, seen := s.firstRow[tag]; !seen {
-				s.firstRow[tag] = row
-			}
-		}
+		recordRow(stats, row, line)
 		return nil
 	})
 	if err != nil {
@@ -92,6 +66,40 @@ func checkFieldTypeMixed(ctx *rules.Context, emit func(diag.Finding)) {
 	}
 
 	emitMixed(stats, path, emit)
+}
+
+// recordRow parses a single JSONL row and updates the per-field stats.
+// Parse failures are silently skipped — jsonl-malformed-line owns them.
+func recordRow(stats map[string]*fieldStat, row int, line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	var obj map[string]any
+	if json.Unmarshal(line, &obj) != nil {
+		return
+	}
+	for k, v := range obj {
+		recordValue(stats, row, k, v)
+	}
+}
+
+func recordValue(stats map[string]*fieldStat, row int, k string, v any) {
+	tag := jsonTypeOf(v)
+	if tag == "" {
+		return
+	}
+	s, ok := stats[k]
+	if !ok {
+		s = &fieldStat{
+			counts:   map[string]int{},
+			firstRow: map[string]int{},
+		}
+		stats[k] = s
+	}
+	s.counts[tag]++
+	if _, seen := s.firstRow[tag]; !seen {
+		s.firstRow[tag] = row
+	}
 }
 
 func emitMixed(stats map[string]*fieldStat, path string, emit func(diag.Finding)) {
@@ -107,8 +115,7 @@ func emitMixed(stats map[string]*fieldStat, path string, emit func(diag.Finding)
 			continue
 		}
 		dominant, dominantCount := pickDominant(s.counts)
-		types := sortedKeys(s.counts)
-		for _, t := range types {
+		for _, t := range sortedKeys(s.counts) {
 			if t == dominant {
 				continue
 			}
