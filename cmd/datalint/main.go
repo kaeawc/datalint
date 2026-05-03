@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/kaeawc/datalint/internal/config"
+	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/output"
 	"github.com/kaeawc/datalint/internal/pipeline"
 
@@ -19,6 +20,7 @@ var version = "dev"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
+	format := flag.String("format", "json", "output format: json or sarif")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -31,8 +33,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := output.WriteJSON(os.Stdout, findings); err != nil {
+	if err := writeOutput(*format, findings); err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
+	}
+}
+
+func writeOutput(format string, findings []diag.Finding) error {
+	switch format {
+	case "json":
+		return output.WriteJSON(os.Stdout, findings)
+	case "sarif":
+		return output.WriteSARIF(os.Stdout, findings, version)
+	default:
+		return fmt.Errorf("unknown format %q (want json or sarif)", format)
 	}
 }
