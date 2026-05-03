@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/rules"
@@ -99,47 +98,4 @@ func checkRandomSeedNotSet(ctx *rules.Context, emit func(diag.Finding)) {
 			},
 		})
 	}
-}
-
-// walkPython visits every descendant node depth-first.
-func walkPython(n *sitter.Node, fn func(*sitter.Node)) {
-	if n == nil {
-		return
-	}
-	fn(n)
-	for i := uint32(0); i < n.ChildCount(); i++ {
-		walkPython(n.Child(int(i)), fn)
-	}
-}
-
-// dottedPath returns the dotted-attribute path of an expression like
-// "np.random.shuffle". Returns "" for anything that isn't a simple
-// chain of identifiers — indexed/computed/parenthesized expressions
-// are intentionally rejected so the rule stays high-precision.
-func dottedPath(n *sitter.Node, src []byte) string {
-	if n == nil {
-		return ""
-	}
-	var parts []string
-	cur := n
-	for cur != nil {
-		switch cur.Type() {
-		case "attribute":
-			attr := cur.ChildByFieldName("attribute")
-			if attr == nil {
-				return ""
-			}
-			parts = append([]string{attr.Content(src)}, parts...)
-			cur = cur.ChildByFieldName("object")
-		case "identifier":
-			parts = append([]string{cur.Content(src)}, parts...)
-			cur = nil
-		default:
-			return ""
-		}
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, ".")
 }
