@@ -68,7 +68,14 @@ make lint               # golangci-lint run
 make complexity         # gocyclo -over 10
 make security           # gosec ./...
 make ci                 # vet test complexity lint security licenses
+make pre-push           # lint + complexity + test — run before every push
 ```
+
+Always run `make pre-push` before `git push` on any PR branch. CI's
+`compile-binary`, `test`, `static-analysis`, and `complexity` jobs are
+required for branch protection on `main`, so a failure there blocks
+auto-merge until the next push lands. `pre-push` mirrors those gates
+locally with the slow/flaky ones (`gosec`, `go-licenses`) skipped.
 
 ## Adding a Rule
 
