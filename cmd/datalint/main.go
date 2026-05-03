@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kaeawc/datalint/internal/config"
 	"github.com/kaeawc/datalint/internal/diag"
@@ -28,7 +29,7 @@ func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
-	format := flag.String("format", "json", "output format: json or sarif")
+	format := flag.String("format", "json", "output format: json, sarif, or html")
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
@@ -60,7 +61,9 @@ func writeOutput(format string, findings []diag.Finding) error {
 		return output.WriteJSON(os.Stdout, findings)
 	case "sarif":
 		return output.WriteSARIF(os.Stdout, findings, version)
+	case "html":
+		return output.WriteHTML(os.Stdout, findings, version, time.Now())
 	default:
-		return fmt.Errorf("unknown format %q (want json or sarif)", format)
+		return fmt.Errorf("unknown format %q (want json, sarif, or html)", format)
 	}
 }
