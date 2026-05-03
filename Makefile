@@ -1,4 +1,4 @@
-.PHONY: build build-lsp build-mcp test vet lint fmt complexity security licenses tidy ci clean all
+.PHONY: build build-lsp build-mcp test vet lint fmt complexity security licenses tidy ci pre-push clean all
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS = -s -w -X main.version=$(VERSION)
@@ -38,6 +38,13 @@ tidy:
 	go mod tidy
 
 ci: vet test complexity lint security licenses
+
+# pre-push runs the same gates that block a PR in CI: lint catches
+# formatting + revive/staticcheck/govet, complexity catches gocyclo,
+# test catches the obvious. gosec and go-licenses are excluded — they
+# slow the loop and are flakier locally than in CI.
+pre-push: lint complexity test
+	@echo "✓ pre-push gate passed"
 
 clean:
 	rm -f $(BIN) datalint-lsp datalint-mcp junit-report.xml gosec-report.xml
