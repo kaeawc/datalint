@@ -1,0 +1,33 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Test/security reports
+*report.xml
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Local env
+.env
+.env.local
+
+# Built CLI binaries
+/datalint
+/datalint-lsp
+/datalint-mcp
+
+# Editor / tooling caches
+.claude/
+.idea/
+.vscode/
