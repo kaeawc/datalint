@@ -96,11 +96,11 @@ Sixteen rules across all five README categories. Configurable thresholds, enable
 | `system-prompt-leaks-eval-instructions` | leakage | warning | medium | per-file (JSONL) | — |
 | `privacy-pii-detected` | file | error | medium | per-file (JSONL) | — |
 
-Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal manifest: `path<TAB>row<TAB>rules`). Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, per-field top-value distribution shifts, and character-length percentiles (count / mean / p50 / p90); `--diff-format=text|json` (text default).
+Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal manifest: `path<TAB>row<TAB>rules`). Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, per-field top-value distribution shifts, and linearly-interpolated character-length percentiles (count / mean / min / p50 / p90 / p99 / max); `--diff-format=text|json` (text default).
 
 ### IDE / agent integrations
 
-- **`datalint-lsp`** — Language Server speaking JSON-RPC 2.0 over stdio. Capabilities: `textDocumentSync` (Full), `diagnosticProvider`, `codeActionProvider`. Lints on `didOpen` / `didChange` (live, against the in-memory buffer for Python) and `didSave`. Auto-fixes surface as `quickfix` code actions — same edits the CLI's `--fix` would apply.
+- **`datalint-lsp`** — Language Server speaking JSON-RPC 2.0 over stdio. Capabilities: `textDocumentSync` (Incremental), `diagnosticProvider`, `codeActionProvider`. Lints on `didOpen` / `didChange` (live, against the in-memory buffer for Python; range-bearing changes splice into the buffer using UTF-16 character offsets per the LSP default) and `didSave`. Auto-fixes surface as `quickfix` code actions — same edits the CLI's `--fix` would apply.
 - **`datalint-mcp`** — Model Context Protocol server with newline-delimited JSON-RPC 2.0 over stdio. Surface:
   - **Tools**: `lint` (returns findings as a JSON text block) and `fix` (lints, applies fixes via `internal/fixer`, returns a summary plus the pre-fix findings).
   - **Resources**: `datalint:rules/index` (Markdown table of every registered rule) and `datalint:config/example` (annotated `datalint.yml` covering every config knob).
@@ -145,7 +145,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 - **Capability gates** — `NeedsCorpusScan`, `NeedsLSH`, `NeedsExternalEvalSet`, `NeedsPythonAST`, `NeedsJSONL`, `NeedsParquet`. Declared on each rule; the dispatcher routes per-file vs corpus-scope accordingly.
 - **Outputs**: JSON, SARIF 2.1.0, HTML report, drops (per-row removal manifest).
 - **Autofix tiers** — `cosmetic`, `idiomatic`, `semantic`. `random-seed-not-set` emits an `idiomatic` fix; the `--fix` flag applies dedup'd edits in reverse-line order. The same fix surfaces through LSP `textDocument/codeAction` and the MCP `fix` tool.
-- **LSP server** — full-sync `didOpen` / `didChange` / `didSave` / `didClose` lifecycle, in-memory buffer store for live linting Python, `quickfix` code actions for fixes in the editor's selected range.
+- **LSP server** — incremental `didOpen` / `didChange` / `didSave` / `didClose` lifecycle, in-memory buffer store for live linting Python, `quickfix` code actions for fixes in the editor's selected range.
 - **MCP server** — `tools/list` + `tools/call` for `lint` and `fix`; `resources/list` + `resources/read` for the rules-index Markdown and the annotated config example; `prompts/list` + `prompts/get` for `explain-rule`, `draft-fix`, and `review-corpus`. Same rule pipeline as the CLI.
 
 ## MVP
@@ -163,8 +163,6 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 - **Explicit schema declarations** — turn `optional-field-required-by-downstream` from a presence-ratio heuristic into a literal schema-vs-data check.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
 - **Language mix shifts** in diff mode — top-value and length-percentile shifts landed; language profiles are the next data dimension.
-- **Interpolated diff percentiles** — currently nearest-rank; would also add p99 / max / min columns.
-- **LSP `textDocument/didChange` incremental sync** — currently full-sync only.
 - **More MCP prompts** — `explain-rule`, `draft-fix`, and `review-corpus` ship today; further templates (e.g. a per-finding triage walkthrough) are an open follow-up.
 
 ## Why this is the right shape
