@@ -29,6 +29,36 @@ type stringSliceFlag []string
 func (s *stringSliceFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
+// datasetFlag accepts the `--dataset NAME=PATH[,PATH...]` shape and
+// folds repeats into a single map[name][]paths. Same name used twice
+// concatenates: `--dataset train=a.jsonl --dataset train=b.jsonl` ⇒
+// {train: [a.jsonl, b.jsonl]}.
+type datasetFlag map[string][]string
+
+func (d datasetFlag) String() string {
+	parts := make([]string, 0, len(d))
+	for name, paths := range d {
+		parts = append(parts, name+"="+strings.Join(paths, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (d datasetFlag) Set(v string) error {
+	idx := strings.IndexByte(v, '=')
+	if idx <= 0 {
+		return fmt.Errorf("expected NAME=PATH[,PATH...], got %q", v)
+	}
+	name := v[:idx]
+	paths := strings.Split(v[idx+1:], ",")
+	for _, p := range paths {
+		if p == "" {
+			return fmt.Errorf("empty path in --dataset value %q", v)
+		}
+	}
+	d[name] = append(d[name], paths...)
+	return nil
+}
+
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	format := flag.String("format", "json", "output format: json, sarif, or html")
@@ -41,6 +71,8 @@ func main() {
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
+	datasets := datasetFlag{}
+	flag.Var(datasets, "dataset", "named JSONL split for cross-dataset rules: NAME=PATH[,PATH...] (repeatable; same NAME concatenates)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -63,10 +95,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
 	}
-	if len(train) > 0 || len(eval) > 0 {
-		corpus := &rules.CorpusContext{Train: train, Eval: eval}
-		findings = append(findings, pipeline.RunCorpus(corpus, cfg)...)
-	}
+	findings = append(findings, runCorpusIfRequested(train, eval, datasets, cfg)...)
 
 	displayed, err := filterBySeverity(findings, *minSeverity)
 	if err != nil {
@@ -84,6 +113,17 @@ func main() {
 	// is a display preference, --fail-on is a CI gate. Hiding errors
 	// from output shouldn't also hide them from the gate.
 	enforceFailOn(*failOn, findings)
+}
+
+// runCorpusIfRequested runs corpus-scope rules when at least one of
+// the corpus inputs is non-empty. Pulled out of main to keep main's
+// gocyclo complexity under 10.
+func runCorpusIfRequested(train, eval []string, datasets datasetFlag, cfg config.Config) []diag.Finding {
+	if len(train) == 0 && len(eval) == 0 && len(datasets) == 0 {
+		return nil
+	}
+	corpus := &rules.CorpusContext{Train: train, Eval: eval, Datasets: datasets}
+	return pipeline.RunCorpus(corpus, cfg)
 }
 
 func applyFixesIfRequested(autoFix bool, findings []diag.Finding) {

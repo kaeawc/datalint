@@ -76,11 +76,14 @@ type CheckFunc func(ctx *Context, emit func(diag.Finding))
 
 // CorpusContext carries the cross-file inputs available to corpus-scope
 // rules. Train and Eval are the JSONL paths the user grouped under
-// `--train` / `--eval`. Either may be empty. Settings carries the
-// rule's own config block — same semantics as Context.Settings.
+// `--train` / `--eval`. Datasets is the N-way generalization for the
+// `--dataset NAME=PATH[,PATH...]` flag, used by cross-dataset-overlap
+// and any future N-way rule. All three may be empty. Settings carries
+// the rule's own config block — same semantics as Context.Settings.
 type CorpusContext struct {
 	Train    []string
 	Eval     []string
+	Datasets map[string][]string
 	Settings config.RuleConfig
 }
 

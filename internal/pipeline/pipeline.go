@@ -53,9 +53,9 @@ func dispatch(ctx *rules.Context, registered []*rules.Rule, cfg config.Config, e
 
 // RunCorpus runs every corpus-scope rule once against the supplied
 // CorpusContext. Returns nil findings when no corpus-scope rules are
-// registered or the context has no train/eval input.
+// registered or the context has no train/eval/datasets input.
 func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
-	if corpus == nil || (len(corpus.Train) == 0 && len(corpus.Eval) == 0) {
+	if corpus == nil || (len(corpus.Train) == 0 && len(corpus.Eval) == 0 && len(corpus.Datasets) == 0) {
 		return nil
 	}
 	var findings []diag.Finding
