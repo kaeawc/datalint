@@ -130,3 +130,78 @@ func TestCrossDatasetOverlap_NearDupConfigOverride(t *testing.T) {
 		t.Errorf("message should report similarity: %q", got[0].Message)
 	}
 }
+
+func TestCrossDatasetOverlap_AnchorEarlierFlipsSide(t *testing.T) {
+	// Same fixtures as ThreeWayPairs. With anchor=earlier, every
+	// finding lands on the lex-earlier dataset of each pair instead
+	// of the later one — i.e., on eval (vs train) and on test (vs
+	// train). The overlapping prompts are the same:
+	//   eval row 1 ("photosynthesis") matches train row 2
+	//   test row 1 ("France") matches train row 1
+	train := testutil.Fixture(t, "cross-dataset-overlap/train.jsonl")
+	eval := testutil.Fixture(t, "cross-dataset-overlap/eval.jsonl")
+	test := testutil.Fixture(t, "cross-dataset-overlap/test.jsonl")
+
+	cfg := config.Default()
+	cfg.Rules[crossDatasetOverlapRuleID] = map[string]any{"anchor": "earlier"}
+
+	all := pipeline.RunCorpus(&rules.CorpusContext{
+		Datasets: map[string][]string{
+			"train": {train},
+			"eval":  {eval},
+			"test":  {test},
+		},
+	}, cfg)
+	var got []diag.Finding
+	for _, f := range all {
+		if f.RuleID == crossDatasetOverlapRuleID {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 findings, got %d: %s", len(got), joinMessages(got))
+	}
+
+	// Pair traversal order: (eval,test) → no overlap; (eval,train) →
+	// hit, anchored on eval row 1; (test,train) → hit, anchored on
+	// test row 1.
+	if !strings.HasSuffix(got[0].Location.Path, "eval.jsonl") || got[0].Location.Row != 1 {
+		t.Errorf("first finding = %s row %d, want eval.jsonl row 1",
+			got[0].Location.Path, got[0].Location.Row)
+	}
+	if !strings.HasSuffix(got[1].Location.Path, "test.jsonl") || got[1].Location.Row != 1 {
+		t.Errorf("second finding = %s row %d, want test.jsonl row 1",
+			got[1].Location.Path, got[1].Location.Row)
+	}
+}
+
+func TestCrossDatasetOverlap_BadAnchorFallsBackToLater(t *testing.T) {
+	// Misspelled anchor value silently falls back to the default
+	// (later). Deliberately tolerant — bad config shouldn't kill
+	// the whole run.
+	train := testutil.Fixture(t, "cross-dataset-overlap/train.jsonl")
+	eval := testutil.Fixture(t, "cross-dataset-overlap/eval.jsonl")
+
+	cfg := config.Default()
+	cfg.Rules[crossDatasetOverlapRuleID] = map[string]any{"anchor": "middle"}
+
+	all := pipeline.RunCorpus(&rules.CorpusContext{
+		Datasets: map[string][]string{
+			"train": {train},
+			"eval":  {eval},
+		},
+	}, cfg)
+	var got []diag.Finding
+	for _, f := range all {
+		if f.RuleID == crossDatasetOverlapRuleID {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding, got %d: %s", len(got), joinMessages(got))
+	}
+	// Default anchor=later puts the finding on train (lex-later).
+	if !strings.HasSuffix(got[0].Location.Path, "train.jsonl") {
+		t.Errorf("bad anchor should fall back to later (train); got %s", got[0].Location.Path)
+	}
+}

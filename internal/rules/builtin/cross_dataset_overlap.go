@@ -22,23 +22,35 @@ func init() {
 	})
 }
 
+// anchorLater / anchorEarlier are the supported anchor values. The
+// rule's `anchor` config selects which side of each pair hosts the
+// finding. Anything else falls back to anchorLater silently — bad
+// config shouldn't kill the whole run.
+const (
+	anchorLater   = "later"
+	anchorEarlier = "earlier"
+)
+
 // checkCrossDatasetOverlap is the N-way generalization of
 // train-eval-overlap. For each ordered pair (a, b) of datasets where
 // a < b lexically, it builds the train index for a (exact map +
 // optional MinHash signatures + LSH) and streams b's rows against
-// it, emitting a finding on b's row when a prompt matches. Same
-// config knobs as train-eval-overlap (prompt_field,
-// near_dup_threshold) — they live under this rule's own config key.
+// it, emitting a finding when a prompt matches.
 //
-// The pairwise direction (a → b, not b → a) is intentional: every
-// overlap surfaces exactly once, anchored at the lexically-later
-// dataset. Avoids twice-emitting the same overlap from both sides.
+// `anchor: later` (default) anchors findings on b — useful for
+// leakage workflows where the user typically removes rows from the
+// dataset that came in second. `anchor: earlier` swaps the
+// direction so findings land on a — useful when the eval set is
+// the canonical source and train rows are the ones to scrub.
+//
+// Either way, every overlap surfaces exactly once.
 func checkCrossDatasetOverlap(ctx *rules.CorpusContext, emit func(diag.Finding)) {
 	if ctx == nil || len(ctx.Datasets) < 2 {
 		return
 	}
 	field := ctx.Settings.String("prompt_field", promptFieldDefault)
 	threshold := ctx.Settings.Float("near_dup_threshold", 0.0)
+	anchor := ctx.Settings.String("anchor", anchorLater)
 
 	var mh *dedup.MinHash
 	if threshold > 0 {
@@ -53,9 +65,26 @@ func checkCrossDatasetOverlap(ctx *rules.CorpusContext, emit func(diag.Finding))
 
 	for i, a := range names {
 		for _, b := range names[i+1:] {
-			emitPairwiseOverlap(a, b, indices[a], ctx.Datasets[b], field, threshold, mh, emit)
+			indexed, streamed := pairForAnchor(anchor, a, b)
+			emitPairwiseOverlap(indexed, streamed, indices[indexed], ctx.Datasets[streamed], field, threshold, mh, emit)
 		}
 	}
+}
+
+// pairForAnchor returns (indexedName, streamedName). Findings are
+// emitted on the streamed side, so:
+//
+//   - anchor=later (default): index a, stream b → findings on b
+//     (the lex-later dataset)
+//   - anchor=earlier: index b, stream a → findings on a (the
+//     lex-earlier dataset)
+//
+// Unknown anchor values fall through to the later branch.
+func pairForAnchor(anchor, a, b string) (indexed, streamed string) {
+	if anchor == anchorEarlier {
+		return b, a
+	}
+	return a, b
 }
 
 func sortedDatasetNames(d map[string][]string) []string {
