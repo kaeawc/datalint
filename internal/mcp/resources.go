@@ -138,6 +138,9 @@ rules:
   optional-field-required-by-downstream:
     min_presence_ratio: 0.8
     min_rows: 5
+    required_fields:        # explicit schema; overrides ratio for these fields
+      - input
+      - output
 
   train-eval-overlap:
     prompt_field: prompt
