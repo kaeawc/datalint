@@ -71,6 +71,10 @@ func (s *Server) dispatch(m *Message) error {
 		return s.respondToolsList(m)
 	case "tools/call":
 		return s.respondToolsCall(m)
+	case "resources/list":
+		return s.respondResourcesList(m)
+	case "resources/read":
+		return s.respondResourcesRead(m)
 	}
 	return s.respond(m, nil, &RPCError{
 		Code:    -32601,
@@ -89,7 +93,7 @@ func (s *Server) respond(req *Message, result json.RawMessage, rpcErr *RPCError)
 }
 
 // initializeResult mirrors the MCP InitializeResult shape. v0
-// advertises the tools capability only.
+// advertises the tools and resources capabilities.
 type initializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    serverCapabilities `json:"capabilities"`
@@ -97,13 +101,21 @@ type initializeResult struct {
 }
 
 type serverCapabilities struct {
-	Tools toolsCapability `json:"tools"`
+	Tools     toolsCapability     `json:"tools"`
+	Resources resourcesCapability `json:"resources"`
 }
 
 type toolsCapability struct {
 	// listChanged is the only capability flag MCP defines today;
 	// false means the tool list is static for the connection.
 	ListChanged bool `json:"listChanged"`
+}
+
+type resourcesCapability struct {
+	// listChanged: false → resource set is static. subscribe: false
+	// → server doesn't push resources/updated notifications.
+	ListChanged bool `json:"listChanged"`
+	Subscribe   bool `json:"subscribe"`
 }
 
 type serverInfo struct {
@@ -114,8 +126,11 @@ type serverInfo struct {
 func (s *Server) respondInitialize(m *Message) error {
 	result := initializeResult{
 		ProtocolVersion: protocolVersion,
-		Capabilities:    serverCapabilities{Tools: toolsCapability{ListChanged: false}},
-		ServerInfo:      serverInfo{Name: "datalint-mcp", Version: "dev"},
+		Capabilities: serverCapabilities{
+			Tools:     toolsCapability{ListChanged: false},
+			Resources: resourcesCapability{ListChanged: false, Subscribe: false},
+		},
+		ServerInfo: serverInfo{Name: "datalint-mcp", Version: "dev"},
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
