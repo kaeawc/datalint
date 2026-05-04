@@ -58,12 +58,15 @@ func (c Capability) Has(want Capability) bool { return c&want == want }
 
 // Context is the per-file state passed to each rule's Check function.
 // Python is non-nil only when File.Kind == KindPythonSource and the
-// dispatcher succeeded in parsing the file. Settings carries the
-// rule's own config block (see internal/config); rules read their
-// keys via Settings.Int / Settings.String with defaults.
+// dispatcher succeeded in parsing the file; Parquet is non-nil only
+// when File.Kind == KindParquet and the parquet metadata loaded.
+// Settings carries the rule's own config block (see internal/config);
+// rules read their keys via Settings.Int / Settings.String with
+// defaults.
 type Context struct {
 	File     *scanner.File
 	Python   *scanner.PythonFile
+	Parquet  *scanner.ParquetFile
 	Settings config.RuleConfig
 }
 
