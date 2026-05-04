@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -163,6 +164,154 @@ func TestWriteText_DeltaSign(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCompute_DistributionsCommonField(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	// "label" is enum-like in both; "name" is high-cardinality.
+	writeJSONL(t, oldPath,
+		"{\"name\": \"alice\", \"label\": \"good\"}\n"+
+			"{\"name\": \"bob\", \"label\": \"good\"}\n"+
+			"{\"name\": \"carol\", \"label\": \"bad\"}\n"+
+			"{\"name\": \"dan\", \"label\": \"good\"}\n")
+	writeJSONL(t, newPath,
+		"{\"name\": \"erin\", \"label\": \"bad\"}\n"+
+			"{\"name\": \"frank\", \"label\": \"medium\"}\n"+
+			"{\"name\": \"gina\", \"label\": \"good\"}\n"+
+			"{\"name\": \"henry\", \"label\": \"medium\"}\n")
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var labelDist *diff.FieldDistribution
+	for i := range r.Distributions {
+		if r.Distributions[i].Field == "label" {
+			labelDist = &r.Distributions[i]
+			break
+		}
+	}
+	if labelDist == nil {
+		t.Fatalf("expected 'label' in distributions; got %+v", r.Distributions)
+	}
+
+	if len(labelDist.OldTop) != 2 {
+		t.Fatalf("old top len = %d, want 2", len(labelDist.OldTop))
+	}
+	if labelDist.OldTop[0].Value != "good" || labelDist.OldTop[0].Count != 3 {
+		t.Errorf("old top[0] = %+v, want {good 3}", labelDist.OldTop[0])
+	}
+
+	if len(labelDist.NewTop) != 3 {
+		t.Fatalf("new top len = %d, want 3", len(labelDist.NewTop))
+	}
+	if labelDist.NewTop[0].Value != "medium" || labelDist.NewTop[0].Count != 2 {
+		t.Errorf("new top[0] = %+v, want {medium 2}", labelDist.NewTop[0])
+	}
+	// "bad" and "good" both have count 1 — alphabetical tiebreak puts "bad" first.
+	if labelDist.NewTop[1].Value != "bad" {
+		t.Errorf("new top[1] = %+v, want {bad 1}", labelDist.NewTop[1])
+	}
+}
+
+func TestCompute_DistributionsSkipsHighCardinalityField(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	var oldBody, newBody strings.Builder
+	for i := 0; i < 25; i++ {
+		oldBody.WriteString("{\"name\":\"u" + strconv.Itoa(i) + "\"}\n")
+		newBody.WriteString("{\"name\":\"u" + strconv.Itoa(i+5) + "\"}\n")
+	}
+	writeJSONL(t, oldPath, oldBody.String())
+	writeJSONL(t, newPath, newBody.String())
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range r.Distributions {
+		if fd.Field == "name" {
+			t.Errorf("'name' should be skipped (>%d distinct values)", diff.MaxDistinctForDistribution)
+		}
+	}
+}
+
+func TestCompute_DistributionsSkipsNonStringField(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	// "id" is numeric in both; should not appear in distributions
+	// even though it's a shared field — only string values get counted.
+	writeJSONL(t, oldPath, "{\"id\": 1}\n{\"id\": 2}\n")
+	writeJSONL(t, newPath, "{\"id\": 3}\n{\"id\": 4}\n")
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range r.Distributions {
+		if fd.Field == "id" {
+			t.Errorf("'id' (numeric) should be skipped from distributions")
+		}
+	}
+}
+
+func TestWriteText_RendersDistributionSection(t *testing.T) {
+	r := diff.Report{
+		OldPath: "old.jsonl",
+		NewPath: "new.jsonl",
+		OldRows: 4,
+		NewRows: 4,
+		Common:  []string{"label"},
+		Distributions: []diff.FieldDistribution{
+			{
+				Field: "label",
+				OldTop: []diff.ValueCount{
+					{Value: "good", Count: 3},
+					{Value: "bad", Count: 1},
+				},
+				NewTop: []diff.ValueCount{
+					{Value: "medium", Count: 2},
+					{Value: "good", Count: 1},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := diff.WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"field distributions",
+		"label:",
+		"old top: [good:3, bad:1]",
+		"new top: [medium:2, good:1]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteText_OmitsDistributionSectionWhenEmpty(t *testing.T) {
+	// Pre-existing behavior pinned: a Report with no Distributions
+	// must NOT print the section header.
+	r := diff.Report{OldPath: "a", NewPath: "b", OldRows: 1, NewRows: 1}
+	var buf bytes.Buffer
+	if err := diff.WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "field distributions") {
+		t.Errorf("section should be omitted when no distributions:\n%s", buf.String())
 	}
 }
 
