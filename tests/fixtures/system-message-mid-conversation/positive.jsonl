@@ -1,0 +1,3 @@
+{"messages": [{"role": "system", "content": "be helpful"}, {"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}
+{"messages": [{"role": "user", "content": "q"}, {"role": "system", "content": "be even more helpful"}, {"role": "assistant", "content": "a"}]}
+{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}, {"role": "system", "content": "now do this"}, {"role": "user", "content": "q2"}]}
