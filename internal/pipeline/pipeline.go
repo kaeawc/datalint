@@ -19,18 +19,36 @@ func Run(paths []string, cfg config.Config) ([]diag.Finding, error) {
 	registered := rules.All()
 	for _, path := range paths {
 		ctx := buildContext(path)
-		for _, rule := range registered {
-			if !cfg.IsEnabled(rule.ID) {
-				continue
-			}
-			if !rule.AppliesTo(ctx.File) {
-				continue
-			}
-			ctx.Settings = cfg.Rule(rule.ID)
-			rule.Check(ctx, emit)
-		}
+		dispatch(ctx, registered, cfg, emit)
 	}
 	return suppression.Filter(findings), nil
+}
+
+// RunDocument lints a single file using in-memory source bytes when
+// supplied. If source is nil the function falls back to disk; this
+// matches the LSP server's flow where didOpen/didChange/didSave all
+// route through the same call but only the on-disk save needs the
+// disk read. Currently honors source override only for Python; other
+// kinds use the on-disk variant since editors rarely live-edit them.
+func RunDocument(path string, source []byte, cfg config.Config) ([]diag.Finding, error) {
+	ctx := buildContextWithSource(path, source)
+	var findings []diag.Finding
+	emit := func(f diag.Finding) { findings = append(findings, f) }
+	dispatch(ctx, rules.All(), cfg, emit)
+	return suppression.Filter(findings), nil
+}
+
+func dispatch(ctx *rules.Context, registered []*rules.Rule, cfg config.Config, emit func(diag.Finding)) {
+	for _, rule := range registered {
+		if !cfg.IsEnabled(rule.ID) {
+			continue
+		}
+		if !rule.AppliesTo(ctx.File) {
+			continue
+		}
+		ctx.Settings = cfg.Rule(rule.ID)
+		rule.Check(ctx, emit)
+	}
 }
 
 // RunCorpus runs every corpus-scope rule once against the supplied
@@ -62,11 +80,19 @@ func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
 // rule will surface these as findings instead of silently dropping
 // them.
 func buildContext(path string) *rules.Context {
+	return buildContextWithSource(path, nil)
+}
+
+// buildContextWithSource is buildContext with an optional in-memory
+// override for the file's bytes. Only honored for KindPythonSource;
+// other kinds always read from disk.
+func buildContextWithSource(path string, source []byte) *rules.Context {
 	file := scanner.Classify(path)
 	ctx := &rules.Context{File: file}
 	switch file.Kind {
 	case scanner.KindPythonSource:
-		if py, err := scanner.ParsePython(path); err == nil {
+		py := parsePythonForContext(path, source)
+		if py != nil {
 			ctx.Python = py
 		}
 	case scanner.KindParquet:
@@ -75,4 +101,19 @@ func buildContext(path string) *rules.Context {
 		}
 	}
 	return ctx
+}
+
+func parsePythonForContext(path string, source []byte) *scanner.PythonFile {
+	if source != nil {
+		py, err := scanner.ParsePythonBytes(path, source)
+		if err != nil {
+			return nil
+		}
+		return py
+	}
+	py, err := scanner.ParsePython(path)
+	if err != nil {
+		return nil
+	}
+	return py
 }

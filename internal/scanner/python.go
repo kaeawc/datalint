@@ -23,6 +23,14 @@ func ParsePython(path string) (*PythonFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	return ParsePythonBytes(path, source)
+}
+
+// ParsePythonBytes parses Python source from in-memory bytes. Used by
+// the LSP server for live-linting unsaved changes — the path keeps
+// findings citing the user's URL, even though the bytes haven't hit
+// disk yet.
+func ParsePythonBytes(path string, source []byte) (*PythonFile, error) {
 	parser := sitter.NewParser()
 	parser.SetLanguage(python.GetLanguage())
 	tree, err := parser.ParseCtx(context.Background(), nil, source)
