@@ -41,17 +41,33 @@ type Report struct {
 	Distributions []FieldDistribution // per shared enum-like string field
 }
 
-// FieldDistribution carries the top-K most frequent string values
-// and character-length stats for one shared field, in each version.
-// Top lists are sorted by count descending, ties broken alphabetically
-// for stable output. LengthStats are computed over every string
-// occurrence of the field (not just top-K).
+// FieldDistribution carries the top-K most frequent string values,
+// character-length stats, and Unicode-script mix for one shared
+// field, in each version. Top lists are sorted by count descending,
+// ties broken alphabetically for stable output. LengthStats are
+// computed over every string occurrence of the field (not just
+// top-K). Scripts are sorted by letter count descending; both sides
+// are nil when neither version has enough letters to report a stable
+// mix (MinRunesForScriptMix).
 type FieldDistribution struct {
-	Field     string
-	OldTop    []ValueCount
-	NewTop    []ValueCount
-	OldLength LengthStats
-	NewLength LengthStats
+	Field      string
+	OldTop     []ValueCount
+	NewTop     []ValueCount
+	OldLength  LengthStats
+	NewLength  LengthStats
+	OldScripts []ScriptCount
+	NewScripts []ScriptCount
+}
+
+// ScriptCount pairs a Unicode-script name (e.g. "Latin", "Han",
+// "Cyrillic"; "Other" for letters that don't match a tracked
+// script) with its letter count and the ratio against the per-side
+// total of tracked-script letters. Non-letter runes (digits,
+// punctuation, whitespace) are not included in the denominator.
+type ScriptCount struct {
+	Script string
+	Count  int
+	Ratio  float64
 }
 
 // LengthStats summarises character-length distribution per field.
@@ -79,11 +95,14 @@ type ValueCount struct {
 
 // fileStats are the running counts scanFields collects per file.
 // lengths records every string occurrence's character length so the
-// final pass can compute percentiles per field.
+// final pass can compute percentiles per field. scripts accumulates
+// per-field per-script letter counts across all rows for the
+// language-mix section.
 type fileStats struct {
 	fields  map[string]bool
 	values  map[string]map[string]int // field -> value -> count
 	lengths map[string][]int          // field -> per-occurrence char lengths
+	scripts map[string]map[string]int // field -> script name -> letter count
 }
 
 // Compute streams both files once each, recording the set of
@@ -119,6 +138,7 @@ func scanFields(path string) (int, fileStats, error) {
 		fields:  map[string]bool{},
 		values:  map[string]map[string]int{},
 		lengths: map[string][]int{},
+		scripts: map[string]map[string]int{},
 	}
 	err := scanner.StreamJSONL(path, func(_ int, line []byte) error {
 		recordRow(&rows, &stats, line)
@@ -150,13 +170,37 @@ func recordRow(rows *int, stats *fileStats, line []byte) {
 		}
 		stats.values[k][s]++
 		stats.lengths[k] = append(stats.lengths[k], len(s))
+		mergeScriptCounts(stats.scripts, k, countScripts(s))
+	}
+}
+
+// mergeScriptCounts accumulates per-rune script counts for one
+// string into the running per-field tally on stats.scripts.
+func mergeScriptCounts(dest map[string]map[string]int, field string, counts map[string]int) {
+	if len(counts) == 0 {
+		return
+	}
+	if dest[field] == nil {
+		dest[field] = map[string]int{}
+	}
+	for name, c := range counts {
+		dest[field][name] += c
 	}
 }
 
 // buildDistributions emits a FieldDistribution per shared field
-// where neither side blew past MaxDistinctForDistribution. Fields
-// with no string occurrences in either version are skipped — the
-// value count would be zero on both sides.
+// that has at least one string occurrence on either side. The
+// per-section gating differs:
+//
+//   - Top values are populated only when the union cardinality is
+//     ≤ MaxDistinctForDistribution. Free-text fields would
+//     otherwise produce a noisy "top 5 of thousands" list.
+//   - Length stats are always populated when string occurrences
+//     exist. They're useful even for free-text fields ("prompts
+//     grew 3× longer on average").
+//   - Script mix is populated only when at least one side has
+//     ≥ MinRunesForScriptMix tracked letters; small enum fields
+//     don't produce a stable script profile.
 func buildDistributions(common []string, oldStats, newStats fileStats) []FieldDistribution {
 	out := make([]FieldDistribution, 0)
 	for _, field := range common {
@@ -165,17 +209,19 @@ func buildDistributions(common []string, oldStats, newStats fileStats) []FieldDi
 		if len(o) == 0 && len(n) == 0 {
 			continue
 		}
-		distinct := unionSize(o, n)
-		if distinct > MaxDistinctForDistribution {
-			continue
+		oldScripts, newScripts := buildScriptMix(oldStats.scripts[field], newStats.scripts[field])
+		fd := FieldDistribution{
+			Field:      field,
+			OldLength:  computeLengthStats(oldStats.lengths[field]),
+			NewLength:  computeLengthStats(newStats.lengths[field]),
+			OldScripts: oldScripts,
+			NewScripts: newScripts,
 		}
-		out = append(out, FieldDistribution{
-			Field:     field,
-			OldTop:    topByCount(o, TopK),
-			NewTop:    topByCount(n, TopK),
-			OldLength: computeLengthStats(oldStats.lengths[field]),
-			NewLength: computeLengthStats(newStats.lengths[field]),
-		})
+		if unionSize(o, n) <= MaxDistinctForDistribution {
+			fd.OldTop = topByCount(o, TopK)
+			fd.NewTop = topByCount(n, TopK)
+		}
+		out = append(out, fd)
 	}
 	return out
 }
@@ -302,8 +348,11 @@ func WriteJSON(w io.Writer, r Report) error {
 }
 
 // WriteText renders r as a human-readable summary on w. The trailing
-// distribution section appears only when at least one shared
-// enum-like string field showed up.
+// distribution section appears only when at least one shared string
+// field showed up. Each subsection (top values, length stats, script
+// mix) is rendered only for fields where it carries signal — top
+// values are skipped on free-text fields, script mix is skipped on
+// short enum fields.
 func WriteText(w io.Writer, r Report) error {
 	delta := r.NewRows - r.OldRows
 	sign := ""
@@ -319,21 +368,40 @@ func WriteText(w io.Writer, r Report) error {
 		fmt.Sprintf("  fields in both:  [%s]", strings.Join(r.Common, ", ")),
 	}
 	if len(r.Distributions) > 0 {
-		lines = append(lines, "  field distributions (shared string fields, ≤"+fmt.Sprintf("%d", MaxDistinctForDistribution)+" distinct values):")
+		lines = append(lines, "  field distributions (shared string fields):")
 		for _, fd := range r.Distributions {
-			lines = append(lines, fmt.Sprintf("    %s:", fd.Field))
-			lines = append(lines, fmt.Sprintf("      old top:    %s", formatValueCounts(fd.OldTop)))
-			lines = append(lines, fmt.Sprintf("      new top:    %s", formatValueCounts(fd.NewTop)))
-			if fd.OldLength.Count > 0 {
-				lines = append(lines, fmt.Sprintf("      old length: %s", formatLengthStats(fd.OldLength)))
-			}
-			if fd.NewLength.Count > 0 {
-				lines = append(lines, fmt.Sprintf("      new length: %s", formatLengthStats(fd.NewLength)))
-			}
+			lines = append(lines, formatFieldDistribution(fd)...)
 		}
 	}
 	_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
 	return err
+}
+
+// formatFieldDistribution renders one FieldDistribution as a slice
+// of lines (without the trailing newline) for WriteText. Each
+// subsection is gated on having something useful to say so free-
+// text and enum fields don't emit empty "old top: []" lines.
+func formatFieldDistribution(fd FieldDistribution) []string {
+	out := []string{fmt.Sprintf("    %s:", fd.Field)}
+	if len(fd.OldTop) > 0 || len(fd.NewTop) > 0 {
+		out = append(out,
+			fmt.Sprintf("      old top:     %s", formatValueCounts(fd.OldTop)),
+			fmt.Sprintf("      new top:     %s", formatValueCounts(fd.NewTop)),
+		)
+	}
+	if fd.OldLength.Count > 0 {
+		out = append(out, fmt.Sprintf("      old length:  %s", formatLengthStats(fd.OldLength)))
+	}
+	if fd.NewLength.Count > 0 {
+		out = append(out, fmt.Sprintf("      new length:  %s", formatLengthStats(fd.NewLength)))
+	}
+	if len(fd.OldScripts) > 0 || len(fd.NewScripts) > 0 {
+		out = append(out,
+			fmt.Sprintf("      old scripts: %s", formatScriptMix(fd.OldScripts)),
+			fmt.Sprintf("      new scripts: %s", formatScriptMix(fd.NewScripts)),
+		)
+	}
+	return out
 }
 
 func formatLengthStats(s LengthStats) string {
@@ -348,6 +416,17 @@ func formatValueCounts(vc []ValueCount) string {
 	parts := make([]string, 0, len(vc))
 	for _, v := range vc {
 		parts = append(parts, fmt.Sprintf("%s:%d", v.Value, v.Count))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func formatScriptMix(sc []ScriptCount) string {
+	if len(sc) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(sc))
+	for _, s := range sc {
+		parts = append(parts, fmt.Sprintf("%s:%d (%.0f%%)", s.Script, s.Count, s.Ratio*100))
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }
