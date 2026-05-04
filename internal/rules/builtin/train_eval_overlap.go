@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kaeawc/datalint/internal/dedup"
 	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/rules"
 	"github.com/kaeawc/datalint/internal/scanner"
@@ -29,59 +30,126 @@ type promptLoc struct {
 	row  int
 }
 
+// fuzzyEntry pairs a train-row's MinHash signature with its location
+// for the near-duplicate scan path.
+type fuzzyEntry struct {
+	sig []uint64
+	loc promptLoc
+	raw string
+}
+
+// trainIndex packages the exact-match map and the optional fuzzy
+// entries together so streamEvalAgainstTrain has one input.
+type trainIndex struct {
+	exact map[string]promptLoc
+	fuzzy []fuzzyEntry
+}
+
 // promptFieldDefault is the JSON field whose trimmed string value
 // counts as a row's prompt. Override per project via:
 //
 //	rules:
 //	  train-eval-overlap:
 //	    prompt_field: input
+//	    near_dup_threshold: 0.85
 const promptFieldDefault = "prompt"
 
 // checkTrainEvalOverlap streams each train file once to build a map of
-// normalized prompt -> first (path, row), then streams each eval file
-// and emits one finding per row whose prompt is also in the train map.
+// trimmed prompt → first (path, row), then streams each eval file
+// and emits one finding per row whose prompt is an exact (or, when
+// near_dup_threshold > 0, near-duplicate) match against the train
+// index.
 //
-// v0 uses exact match on the configured prompt field with leading/
-// trailing whitespace trimmed. MinHash + LSH for near-duplicates is
-// the planned follow-up, gated behind NeedsLSH so it stays opt-in.
+// near_dup_threshold = 0 (default) keeps the original exact-match
+// behavior. With threshold > 0, MinHash signatures (128 hashes,
+// 3-token shingles) are computed for every train prompt and each
+// eval prompt; the train list is scanned linearly per eval row and
+// the best match above threshold is cited. v0 is O(M*N); LSH bands
+// for sublinear lookup are tracked as a follow-up.
 func checkTrainEvalOverlap(ctx *rules.CorpusContext, emit func(diag.Finding)) {
 	if ctx == nil || len(ctx.Train) == 0 || len(ctx.Eval) == 0 {
 		return
 	}
 	field := ctx.Settings.String("prompt_field", promptFieldDefault)
-	train := buildTrainIndex(ctx.Train, field)
-	if len(train) == 0 {
+	threshold := ctx.Settings.Float("near_dup_threshold", 0.0)
+
+	var mh *dedup.MinHash
+	if threshold > 0 {
+		mh = dedup.New(0)
+	}
+
+	idx := buildTrainIndex(ctx.Train, field, mh)
+	if len(idx.exact) == 0 && len(idx.fuzzy) == 0 {
 		return
 	}
 	for _, p := range ctx.Eval {
-		streamEvalAgainstTrain(p, field, train, emit)
+		streamEvalAgainstTrain(p, field, &idx, threshold, mh, emit)
 	}
 }
 
-func streamEvalAgainstTrain(p, field string, train map[string]promptLoc, emit func(diag.Finding)) {
+func streamEvalAgainstTrain(p, field string, idx *trainIndex, threshold float64, mh *dedup.MinHash, emit func(diag.Finding)) {
 	_ = scanner.StreamJSONL(p, func(row int, line []byte) error {
 		prompt := extractPrompt(line, field)
 		if prompt == "" {
 			return nil
 		}
-		loc, hit := train[prompt]
-		if !hit {
+		if loc, hit := idx.exact[prompt]; hit {
+			emit(exactFinding(p, row, loc))
 			return nil
 		}
-		emit(diag.Finding{
-			RuleID:   "train-eval-overlap",
-			Severity: diag.SeverityError,
-			Message: fmt.Sprintf(
-				"eval prompt also appears in train at %s row %d",
-				loc.path, loc.row),
-			Location: diag.Location{Path: p, Row: row},
-		})
+		if threshold > 0 && mh != nil {
+			if f, sim, hit := bestFuzzyMatch(prompt, mh, idx.fuzzy, threshold); hit {
+				emit(nearDupFinding(p, row, f.loc, sim))
+			}
+		}
 		return nil
 	})
 }
 
-func buildTrainIndex(paths []string, field string) map[string]promptLoc {
-	index := map[string]promptLoc{}
+func bestFuzzyMatch(prompt string, mh *dedup.MinHash, entries []fuzzyEntry, threshold float64) (fuzzyEntry, float64, bool) {
+	sig := mh.Signature(prompt)
+	if sig == nil {
+		return fuzzyEntry{}, 0, false
+	}
+	bestIdx := -1
+	bestSim := 0.0
+	for i, fe := range entries {
+		sim := dedup.Similarity(sig, fe.sig)
+		if sim > bestSim {
+			bestSim = sim
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 || bestSim < threshold {
+		return fuzzyEntry{}, 0, false
+	}
+	return entries[bestIdx], bestSim, true
+}
+
+func exactFinding(path string, row int, loc promptLoc) diag.Finding {
+	return diag.Finding{
+		RuleID:   "train-eval-overlap",
+		Severity: diag.SeverityError,
+		Message: fmt.Sprintf(
+			"eval prompt also appears in train at %s row %d",
+			loc.path, loc.row),
+		Location: diag.Location{Path: path, Row: row},
+	}
+}
+
+func nearDupFinding(path string, row int, loc promptLoc, sim float64) diag.Finding {
+	return diag.Finding{
+		RuleID:   "train-eval-overlap",
+		Severity: diag.SeverityError,
+		Message: fmt.Sprintf(
+			"eval prompt is a near-duplicate (similarity %.2f) of train at %s row %d",
+			sim, loc.path, loc.row),
+		Location: diag.Location{Path: path, Row: row},
+	}
+}
+
+func buildTrainIndex(paths []string, field string, mh *dedup.MinHash) trainIndex {
+	idx := trainIndex{exact: map[string]promptLoc{}}
 	for _, p := range paths {
 		path := p
 		_ = scanner.StreamJSONL(path, func(row int, line []byte) error {
@@ -89,13 +157,22 @@ func buildTrainIndex(paths []string, field string) map[string]promptLoc {
 			if prompt == "" {
 				return nil
 			}
-			if _, exists := index[prompt]; !exists {
-				index[prompt] = promptLoc{path: path, row: row}
+			if _, exists := idx.exact[prompt]; !exists {
+				idx.exact[prompt] = promptLoc{path: path, row: row}
+			}
+			if mh != nil {
+				if sig := mh.Signature(prompt); sig != nil {
+					idx.fuzzy = append(idx.fuzzy, fuzzyEntry{
+						sig: sig,
+						loc: promptLoc{path: path, row: row},
+						raw: prompt,
+					})
+				}
 			}
 			return nil
 		})
 	}
-	return index
+	return idx
 }
 
 // extractPrompt returns the trimmed string value of the named field
