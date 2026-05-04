@@ -11,6 +11,7 @@ import (
 
 	"github.com/kaeawc/datalint/internal/config"
 	"github.com/kaeawc/datalint/internal/diag"
+	"github.com/kaeawc/datalint/internal/fixer"
 	"github.com/kaeawc/datalint/internal/output"
 	"github.com/kaeawc/datalint/internal/pipeline"
 	"github.com/kaeawc/datalint/internal/rules"
@@ -33,6 +34,7 @@ func main() {
 	configPath := flag.String("config", "", "path to datalint.yml (default: discover datalint.yml or .datalint.yml in cwd)")
 	failOn := flag.String("fail-on", "none", "exit non-zero when any finding has severity >= this (none|info|warning|error)")
 	minSeverity := flag.String("min-severity", "none", "drop findings below this severity from output (none|info|warning|error); does not affect --fail-on")
+	autoFix := flag.Bool("fix", false, "apply auto-fixes for findings whose rule emits one (modifies files in place)")
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
@@ -68,10 +70,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	applyFixesIfRequested(*autoFix, findings)
+
 	// fail-on intentionally inspects the unfiltered set: --min-severity
 	// is a display preference, --fail-on is a CI gate. Hiding errors
 	// from output shouldn't also hide them from the gate.
-	exit, err := exitCodeForFailOn(*failOn, findings)
+	enforceFailOn(*failOn, findings)
+}
+
+func applyFixesIfRequested(autoFix bool, findings []diag.Finding) {
+	if !autoFix {
+		return
+	}
+	res, err := fixer.Apply(findings)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "datalint:", err)
+		os.Exit(1)
+	}
+	if res.FilesModified > 0 {
+		fmt.Fprintf(os.Stderr, "datalint: applied %d edit(s) across %d file(s)\n",
+			res.EditsApplied, res.FilesModified)
+	}
+}
+
+func enforceFailOn(level string, findings []diag.Finding) {
+	exit, err := exitCodeForFailOn(level, findings)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(2)
