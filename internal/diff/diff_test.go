@@ -322,9 +322,15 @@ func TestCompute_LengthStatsForCommonField(t *testing.T) {
 	newPath := filepath.Join(dir, "new.jsonl")
 
 	// Old "label": values of length 4, 4, 3, 4 — sorted: [3, 4, 4, 4]
-	//   mean = 15/4 = 3.75; p50 = sorted[2] = 4; p90 = sorted[3] = 4
+	//   mean = 15/4 = 3.75; min = 3; max = 4
+	//   p50: rank = 0.50 * 3 = 1.5 → blend(sorted[1], sorted[2], 0.5) = 4.0
+	//   p90: rank = 0.90 * 3 = 2.7 → blend(sorted[2], sorted[3], 0.7) = 4.0
+	//   p99: rank = 0.99 * 3 = 2.97 → blend(sorted[2], sorted[3], 0.97) = 4.0
 	// New "label": lengths 6, 6, 4 — sorted: [4, 6, 6]
-	//   mean = 16/3 ≈ 5.33; p50 = sorted[1] = 6; p90 = sorted[2] = 6
+	//   mean ≈ 5.33; min = 4; max = 6
+	//   p50: rank = 0.50 * 2 = 1.0 → sorted[1] = 6.0
+	//   p90: rank = 0.90 * 2 = 1.8 → blend(sorted[1], sorted[2], 0.8) = 6.0
+	//   p99: rank = 0.99 * 2 = 1.98 → blend(sorted[1], sorted[2], 0.98) = 6.0
 	writeJSONL(t, oldPath,
 		"{\"label\": \"good\"}\n"+
 			"{\"label\": \"good\"}\n"+
@@ -350,21 +356,71 @@ func TestCompute_LengthStatsForCommonField(t *testing.T) {
 	if fd.OldLength.Mean != 3.75 {
 		t.Errorf("old mean = %f, want 3.75", fd.OldLength.Mean)
 	}
-	if fd.OldLength.P50 != 4 {
-		t.Errorf("old p50 = %d, want 4", fd.OldLength.P50)
+	if fd.OldLength.Min != 3 {
+		t.Errorf("old min = %d, want 3", fd.OldLength.Min)
 	}
-	if fd.OldLength.P90 != 4 {
-		t.Errorf("old p90 = %d, want 4", fd.OldLength.P90)
+	if fd.OldLength.Max != 4 {
+		t.Errorf("old max = %d, want 4", fd.OldLength.Max)
+	}
+	if fd.OldLength.P50 != 4.0 {
+		t.Errorf("old p50 = %f, want 4.0", fd.OldLength.P50)
+	}
+	if fd.OldLength.P90 != 4.0 {
+		t.Errorf("old p90 = %f, want 4.0", fd.OldLength.P90)
+	}
+	if fd.OldLength.P99 != 4.0 {
+		t.Errorf("old p99 = %f, want 4.0", fd.OldLength.P99)
 	}
 
 	if fd.NewLength.Count != 3 {
 		t.Errorf("new count = %d, want 3", fd.NewLength.Count)
 	}
-	if fd.NewLength.P50 != 6 {
-		t.Errorf("new p50 = %d, want 6", fd.NewLength.P50)
+	if fd.NewLength.Min != 4 {
+		t.Errorf("new min = %d, want 4", fd.NewLength.Min)
 	}
-	if fd.NewLength.P90 != 6 {
-		t.Errorf("new p90 = %d, want 6", fd.NewLength.P90)
+	if fd.NewLength.Max != 6 {
+		t.Errorf("new max = %d, want 6", fd.NewLength.Max)
+	}
+	if fd.NewLength.P50 != 6.0 {
+		t.Errorf("new p50 = %f, want 6.0", fd.NewLength.P50)
+	}
+	if fd.NewLength.P90 != 6.0 {
+		t.Errorf("new p90 = %f, want 6.0", fd.NewLength.P90)
+	}
+}
+
+// TestComputeLengthStats_LinearInterpolation pins the actual
+// interpolation behaviour with a vector that exercises the blend.
+// [4, 6] alone yields p50 = 5.0 (midway), which the old nearest-rank
+// implementation would have rounded to 6.
+func TestCompute_LengthStatsLinearInterpolation(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	// Old "label": lengths 4, 6 — sorted: [4, 6]
+	//   p50: rank = 0.5 * 1 = 0.5 → blend(sorted[0], sorted[1], 0.5) = 5.0
+	//   p90: rank = 0.9 * 1 = 0.9 → blend(sorted[0], sorted[1], 0.9) = 5.8
+	//   p99: rank = 0.99 * 1 → 5.98
+	writeJSONL(t, oldPath, "{\"label\": \"good\"}\n{\"label\": \"medium\"}\n")
+	writeJSONL(t, newPath, "{\"label\": \"good\"}\n{\"label\": \"medium\"}\n")
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Distributions) != 1 {
+		t.Fatalf("distributions = %d, want 1", len(r.Distributions))
+	}
+	old := r.Distributions[0].OldLength
+	if old.P50 != 5.0 {
+		t.Errorf("interpolated p50 = %f, want 5.0", old.P50)
+	}
+	if old.P90 < 5.79 || old.P90 > 5.81 {
+		t.Errorf("interpolated p90 = %f, want ~5.8", old.P90)
+	}
+	if old.P99 < 5.97 || old.P99 > 5.99 {
+		t.Errorf("interpolated p99 = %f, want ~5.98", old.P99)
 	}
 }
 
@@ -376,8 +432,8 @@ func TestWriteText_RendersLengthLines(t *testing.T) {
 			Field:     "label",
 			OldTop:    []diff.ValueCount{{Value: "good", Count: 1}},
 			NewTop:    []diff.ValueCount{{Value: "medium", Count: 1}},
-			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, P50: 4, P90: 4},
-			NewLength: diff.LengthStats{Count: 1, Mean: 6.0, P50: 6, P90: 6},
+			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, Min: 4, P50: 4.0, P90: 4.0, P99: 4.0, Max: 4},
+			NewLength: diff.LengthStats{Count: 1, Mean: 6.0, Min: 6, P50: 6.0, P90: 6.0, P99: 6.0, Max: 6},
 		}},
 	}
 	var buf bytes.Buffer
@@ -386,8 +442,8 @@ func TestWriteText_RendersLengthLines(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"old length: count=1 mean=4.0 p50=4 p90=4",
-		"new length: count=1 mean=6.0 p50=6 p90=6",
+		"old length: count=1 mean=4.0 min=4 p50=4.0 p90=4.0 p99=4.0 max=4",
+		"new length: count=1 mean=6.0 min=6 p50=6.0 p90=6.0 p99=6.0 max=6",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -405,7 +461,7 @@ func TestWriteText_OmitsLengthLineWhenCountZero(t *testing.T) {
 		Distributions: []diff.FieldDistribution{{
 			Field:     "label",
 			OldTop:    []diff.ValueCount{{Value: "good", Count: 1}},
-			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, P50: 4, P90: 4},
+			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, Min: 4, P50: 4.0, P90: 4.0, P99: 4.0, Max: 4},
 			// NewLength left zero-valued.
 		}},
 	}
