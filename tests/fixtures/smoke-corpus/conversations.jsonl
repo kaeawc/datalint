@@ -1,0 +1,6 @@
+{"prompt": "What is the capital of France?", "completion": "Paris"}
+not json — should fire jsonl-malformed-line at row 2
+{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "first"}, {"role": "assistant", "content": "second"}]}
+{"messages": [{"role": "system", "content": "Respond only with one of A, B, C, or D."}, {"role": "user", "content": "Q?"}, {"role": "assistant", "content": "A"}]}
+{"messages": [{"role": "user", "content": "weather?"}, {"role": "tool", "tool_call_id": "abc", "content": "sunny"}]}
+{"messages": [{"role": "user", "content": "x"}, {"role": "tool", "content": "lone tool"}]}
