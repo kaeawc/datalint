@@ -22,17 +22,24 @@ func init() {
 	})
 }
 
-// enumLockInRows / enumMaxDistinct are the v0 thresholds. After
-// enumLockInRows occurrences of a string field the rule "locks in"
-// its observed value set; subsequent rows that introduce values
+// enumLockInRowsDefault / enumMaxDistinctDefault are the fallbacks
+// when datalint.yml doesn't override them. Defaults are deliberately
+// tight so small fixtures exercise the full path. Production users
+// should raise these — typical realistic config is e.g. 50 / 20:
+//
+//	rules:
+//	  enum-drift:
+//	    lock_in_rows: 50
+//	    max_distinct: 20
+//
+// After lock_in_rows occurrences of a string field the rule "locks
+// in" its observed value set; subsequent rows that introduce values
 // outside that set are flagged. Fields whose lock-in set already
-// holds more than enumMaxDistinct values are treated as free-text
-// (notEnum) and never flagged. Defaults are very sensitive so a
-// 6-row fixture exercises the rule end-to-end; production users
-// will want to raise both via the (not-yet-implemented) config.
+// holds more than max_distinct values are treated as free-text
+// (notEnum) and never flagged.
 const (
-	enumLockInRows  = 5
-	enumMaxDistinct = 8
+	enumLockInRowsDefault  = 5
+	enumMaxDistinctDefault = 8
 )
 
 // enumStats is the per-field running state across a single file.
@@ -49,14 +56,16 @@ func checkEnumDrift(ctx *rules.Context, emit func(diag.Finding)) {
 		return
 	}
 	path := ctx.File.Path
+	lockIn := ctx.Settings.Int("lock_in_rows", enumLockInRowsDefault)
+	maxDistinct := ctx.Settings.Int("max_distinct", enumMaxDistinctDefault)
 	stats := map[string]*enumStats{}
 	_ = scanner.StreamJSONL(path, func(row int, line []byte) error {
-		recordEnumRow(stats, path, row, line, emit)
+		recordEnumRow(stats, path, row, line, lockIn, maxDistinct, emit)
 		return nil
 	})
 }
 
-func recordEnumRow(stats map[string]*enumStats, path string, row int, line []byte, emit func(diag.Finding)) {
+func recordEnumRow(stats map[string]*enumStats, path string, row int, line []byte, lockIn, maxDistinct int, emit func(diag.Finding)) {
 	if len(line) == 0 {
 		return
 	}
@@ -76,11 +85,11 @@ func recordEnumRow(stats map[string]*enumStats, path string, row int, line []byt
 		if !ok {
 			continue
 		}
-		recordEnumValue(stats, path, row, k, s, emit)
+		recordEnumValue(stats, path, row, k, s, lockIn, maxDistinct, emit)
 	}
 }
 
-func recordEnumValue(stats map[string]*enumStats, path string, row int, field, value string, emit func(diag.Finding)) {
+func recordEnumValue(stats map[string]*enumStats, path string, row int, field, value string, lockIn, maxDistinct int, emit func(diag.Finding)) {
 	e, ok := stats[field]
 	if !ok {
 		e = &enumStats{
@@ -95,9 +104,9 @@ func recordEnumValue(stats map[string]*enumStats, path string, row int, field, v
 			e.values[value] = row
 		}
 		e.rowCount++
-		if e.rowCount >= enumLockInRows {
+		if e.rowCount >= lockIn {
 			e.locked = true
-			if len(e.values) > enumMaxDistinct {
+			if len(e.values) > maxDistinct {
 				e.notEnum = true
 			}
 		}
@@ -118,7 +127,7 @@ func recordEnumValue(stats map[string]*enumStats, path string, row int, field, v
 		Severity: diag.SeverityWarning,
 		Message: fmt.Sprintf(
 			"field %q gained value %q not seen in the first %d lock-in rows",
-			field, value, enumLockInRows),
+			field, value, lockIn),
 		Location: diag.Location{Path: path, Row: row},
 	})
 }

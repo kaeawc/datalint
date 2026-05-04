@@ -5,6 +5,7 @@ package rules
 import (
 	"fmt"
 
+	"github.com/kaeawc/datalint/internal/config"
 	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/scanner"
 )
@@ -57,10 +58,13 @@ func (c Capability) Has(want Capability) bool { return c&want == want }
 
 // Context is the per-file state passed to each rule's Check function.
 // Python is non-nil only when File.Kind == KindPythonSource and the
-// dispatcher succeeded in parsing the file.
+// dispatcher succeeded in parsing the file. Settings carries the
+// rule's own config block (see internal/config); rules read their
+// keys via Settings.Int / Settings.String with defaults.
 type Context struct {
-	File   *scanner.File
-	Python *scanner.PythonFile
+	File     *scanner.File
+	Python   *scanner.PythonFile
+	Settings config.RuleConfig
 }
 
 // CheckFunc is the rule body for per-file rules. It emits Findings via
@@ -69,10 +73,12 @@ type CheckFunc func(ctx *Context, emit func(diag.Finding))
 
 // CorpusContext carries the cross-file inputs available to corpus-scope
 // rules. Train and Eval are the JSONL paths the user grouped under
-// `--train` / `--eval`. Either may be empty.
+// `--train` / `--eval`. Either may be empty. Settings carries the
+// rule's own config block — same semantics as Context.Settings.
 type CorpusContext struct {
-	Train []string
-	Eval  []string
+	Train    []string
+	Eval     []string
+	Settings config.RuleConfig
 }
 
 // CorpusCheckFunc runs once per datalint invocation against the full

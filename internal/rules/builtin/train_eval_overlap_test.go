@@ -72,6 +72,35 @@ func TestTrainEvalOverlap_NoEval(t *testing.T) {
 	}
 }
 
+func TestTrainEvalOverlap_ConfigOverrideField(t *testing.T) {
+	// Project uses `input` instead of `prompt` for the input field.
+	// Without the config override the rule sees no `prompt` keys
+	// and emits nothing; with prompt_field=input it should find the
+	// shared row.
+	train := testutil.Fixture(t, "train-eval-overlap/train-input-field.jsonl")
+	eval := testutil.Fixture(t, "train-eval-overlap/eval-input-field.jsonl")
+	cfg := config.Default()
+	cfg.Rules["train-eval-overlap"] = map[string]any{"prompt_field": "input"}
+
+	all := pipeline.RunCorpus(&rules.CorpusContext{
+		Train: []string{train},
+		Eval:  []string{eval},
+	}, cfg)
+	var got []diag.Finding
+	for _, f := range all {
+		if f.RuleID == trainEvalOverlapRuleID {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding under input field, got %d: %s",
+			len(got), joinMessages(got))
+	}
+	if got[0].Location.Row != 1 {
+		t.Errorf("eval row = %d, want 1", got[0].Location.Row)
+	}
+}
+
 func corpusFindingsForRule(t *testing.T, ctx *rules.CorpusContext, id string) []diag.Finding {
 	t.Helper()
 	all := pipeline.RunCorpus(ctx, config.Default())
