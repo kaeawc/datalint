@@ -17,21 +17,24 @@ import (
 	_ "github.com/kaeawc/datalint/internal/rules/builtin"
 )
 
-// Server holds the per-connection state. It's intentionally tiny:
-// the rule pipeline is stateless, so the only thing the server
-// tracks is the initialized flag (rejects work before initialize)
-// and the config it loads at startup.
+// Server holds the per-connection state. The rule pipeline is
+// stateless, so the only thing the server tracks beyond config is
+// the initialized flag and the in-memory document store: open
+// editor buffers may diverge from the on-disk file between save
+// events, and didChange-driven live linting needs the in-memory
+// version.
 type Server struct {
 	initialized bool
 	cfg         config.Config
 	out         io.Writer
+	docs        map[string][]byte // uri → most recent buffer text
 }
 
 // NewServer returns a Server wired to write outgoing notifications
 // (publishDiagnostics) to out. cfg is the config used for every lint
 // pass.
 func NewServer(out io.Writer, cfg config.Config) *Server {
-	return &Server{out: out, cfg: cfg}
+	return &Server{out: out, cfg: cfg, docs: map[string][]byte{}}
 }
 
 // ErrShutdown is returned by Run when the client sent the exit
@@ -85,10 +88,14 @@ func (s *Server) handleNotification(m *Message) error {
 	case "initialized":
 		s.initialized = true
 		return nil
-	case "textDocument/didOpen", "textDocument/didSave":
-		return s.lintDocument(m)
+	case "textDocument/didOpen":
+		return s.didOpen(m)
+	case "textDocument/didChange":
+		return s.didChange(m)
+	case "textDocument/didSave":
+		return s.didSave(m)
 	case "textDocument/didClose":
-		return s.clearDiagnostics(m)
+		return s.didClose(m)
 	case "exit":
 		return ErrShutdown
 	}
@@ -137,35 +144,109 @@ func (s *Server) respond(req *Message, result json.RawMessage, rpcErr *RPCError)
 	return WriteMessage(s.out, resp)
 }
 
-// textDocumentParams is the subset we need from didOpen/didSave/didClose.
+// textDocumentParams is the URI-only subset used by didSave / didClose.
 type textDocumentParams struct {
 	TextDocument struct {
 		URI string `json:"uri"`
 	} `json:"textDocument"`
 }
 
-func (s *Server) lintDocument(m *Message) error {
+// didOpenParams carries the initial buffer text. The store is keyed
+// by URI so subsequent didChange notifications can update in place.
+type didOpenParams struct {
+	TextDocument struct {
+		URI  string `json:"uri"`
+		Text string `json:"text"`
+	} `json:"textDocument"`
+}
+
+// didChangeParams carries one or more contentChanges. With full sync
+// (the only mode v0 advertises), each entry is the entire new buffer
+// text and the server replaces the stored document. Range-based
+// (incremental) entries are ignored — they require maintaining an
+// edit-applying model that's a follow-up.
+type didChangeParams struct {
+	TextDocument struct {
+		URI string `json:"uri"`
+	} `json:"textDocument"`
+	ContentChanges []struct {
+		Text string `json:"text"`
+	} `json:"contentChanges"`
+}
+
+func (s *Server) didOpen(m *Message) error {
+	p, ok := decodeDidOpen(m.Params)
+	if !ok || p.TextDocument.URI == "" {
+		return nil
+	}
+	s.docs[p.TextDocument.URI] = []byte(p.TextDocument.Text)
+	return s.lintBuffer(p.TextDocument.URI)
+}
+
+func (s *Server) didChange(m *Message) error {
+	p, ok := decodeDidChange(m.Params)
+	if !ok || p.TextDocument.URI == "" || len(p.ContentChanges) == 0 {
+		return nil
+	}
+	// Full sync: take the last change's text as the new buffer.
+	s.docs[p.TextDocument.URI] = []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
+	return s.lintBuffer(p.TextDocument.URI)
+}
+
+// decodeDidOpen / decodeDidChange parse the params with a (struct,
+// bool) return so the caller can early-return on malformed input
+// without binding a json error variable in the same statement (which
+// nilerr flags as suspicious).
+func decodeDidOpen(raw json.RawMessage) (didOpenParams, bool) {
+	var p didOpenParams
+	if json.Unmarshal(raw, &p) != nil {
+		return didOpenParams{}, false
+	}
+	return p, true
+}
+
+func decodeDidChange(raw json.RawMessage) (didChangeParams, bool) {
+	var p didChangeParams
+	if json.Unmarshal(raw, &p) != nil {
+		return didChangeParams{}, false
+	}
+	return p, true
+}
+
+func (s *Server) didSave(m *Message) error {
 	uri := parseURI(m.Params)
 	if uri == "" {
 		return nil
 	}
+	// On save the on-disk file matches the buffer; clear the in-memory
+	// override so subsequent lints (e.g. corpus rules) use disk.
+	delete(s.docs, uri)
+	return s.lintBuffer(uri)
+}
+
+func (s *Server) didClose(m *Message) error {
+	uri := parseURI(m.Params)
+	if uri == "" {
+		return nil
+	}
+	delete(s.docs, uri)
+	return s.publishDiagnostics(uri, nil)
+}
+
+// lintBuffer runs the rule pipeline against either the in-memory
+// document text (Python) or the on-disk file, and publishes the
+// resulting diagnostics under the same URI.
+func (s *Server) lintBuffer(uri string) error {
 	path := uriToPath(uri)
 	if path == "" {
 		return nil
 	}
-	findings, runErr := pipeline.Run([]string{path}, s.cfg)
+	source := s.docs[uri] // nil for files not in the store; pipeline falls back to disk
+	findings, runErr := pipeline.RunDocument(path, source, s.cfg)
 	if runErr != nil {
 		return s.publishDiagnostics(uri, nil)
 	}
 	return s.publishDiagnostics(uri, toLSPDiagnostics(findings, path))
-}
-
-func (s *Server) clearDiagnostics(m *Message) error {
-	uri := parseURI(m.Params)
-	if uri == "" {
-		return nil
-	}
-	return s.publishDiagnostics(uri, nil)
 }
 
 // parseURI returns the textDocument.uri from didOpen/didSave/didClose
