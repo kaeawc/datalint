@@ -61,7 +61,7 @@ func (d datasetFlag) Set(v string) error {
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
-	format := flag.String("format", "json", "output format: json, sarif, or html")
+	format := flag.String("format", "json", "output format: json, sarif, html, or drops (Row-anchored findings as path<TAB>row<TAB>rules)")
 	configPath := flag.String("config", "", "path to datalint.yml (default: discover datalint.yml or .datalint.yml in cwd)")
 	failOn := flag.String("fail-on", "none", "exit non-zero when any finding has severity >= this (none|info|warning|error)")
 	minSeverity := flag.String("min-severity", "none", "drop findings below this severity from output (none|info|warning|error); does not affect --fail-on")
@@ -197,8 +197,10 @@ func writeOutput(format string, findings []diag.Finding) error {
 		return output.WriteSARIF(os.Stdout, findings, version)
 	case "html":
 		return output.WriteHTML(os.Stdout, findings, version, time.Now())
+	case "drops":
+		return output.WriteDrops(os.Stdout, findings)
 	default:
-		return fmt.Errorf("unknown format %q (want json, sarif, or html)", format)
+		return fmt.Errorf("unknown format %q (want json, sarif, html, or drops)", format)
 	}
 }
 
