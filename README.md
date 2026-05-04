@@ -19,7 +19,8 @@ make build                                                       # builds ./data
 ./datalint --config datalint.yml ...                             # custom thresholds & filters
 ./datalint --fix path/to/pipeline.py                             # apply auto-fixes in place
 ./datalint --fail-on=error --min-severity=warning ...            # CI exit codes + display filter
-./datalint --diff-old old.jsonl --diff-new new.jsonl             # row count + field set delta
+./datalint --diff-old old.jsonl --diff-new new.jsonl             # row count + field set + value distribution delta
+./datalint --dataset train=t.jsonl --dataset eval=e.jsonl ...    # N-way cross-dataset overlap
 
 # IDE / agent integrations (JSON-RPC over stdio)
 ./datalint-lsp                                                   # Language Server Protocol
@@ -54,6 +55,9 @@ rules:
   privacy-pii-detected:
     extra_patterns:
       - "internal-id=INT-\\d{6,}"
+  cross-dataset-overlap:
+    prompt_field: input
+    near_dup_threshold: 0.85
 ```
 
 In-source / in-data suppression:
@@ -68,7 +72,7 @@ random.shuffle(data)  # datalint:disable=random-seed-not-set
 
 ## Status
 
-Fifteen rules across all five README categories plus the privacy-scan stretch. Configurable thresholds, enable/disable lists, three output formats, MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode, and live-linting LSP / MCP servers.
+Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, three output formats, MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts, N-way cross-dataset overlap, and live-linting LSP / MCP servers.
 
 | ID | Category | Severity | Confidence | Source | Auto-fix |
 |---|---|---|---|---|---|
@@ -84,11 +88,12 @@ Fifteen rules across all five README categories plus the privacy-scan stretch. C
 | `random-seed-not-set` | pipeline | warning | medium | per-file (Python AST) | idiomatic |
 | `shuffle-after-split` | pipeline | error | medium | per-file (Python AST) | — |
 | `dedup-key-misses-normalization` | pipeline | warning | low | per-file (Python AST) | — |
-| `train-eval-overlap` | leakage | error | high | corpus-scope | — |
+| `train-eval-overlap` | leakage | error | high | corpus-scope (`--train`/`--eval`) | — |
+| `cross-dataset-overlap` | leakage | error | high | corpus-scope (`--dataset`) | — |
 | `system-prompt-leaks-eval-instructions` | leakage | warning | medium | per-file (JSONL) | — |
 | `privacy-pii-detected` | file | error | medium | per-file (JSONL) | — |
 
-Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train` / `--eval` flags. CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta and field-set delta between two dataset versions.
+Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, and per-field top-value distribution shifts for shared enum-like fields.
 
 ### IDE / agent integrations
 
@@ -110,7 +115,8 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
 
 **Leakage**
 - `train-eval-overlap` — exact or near-duplicate prompts appear in both splits (MinHash + 32×4 LSH bands).
-- `eval-prompt-in-pretrain-corpus` — given an eval set, detect contamination in a training shard. *(covered by `train-eval-overlap` with renamed flags; dedicated rule is a follow-up)*
+- `cross-dataset-overlap` — N-way pairwise generalization of `train-eval-overlap` for projects with more than two splits (`--dataset NAME=PATH[,PATH...]`).
+- `eval-prompt-in-pretrain-corpus` — given an eval set, detect contamination in a training shard. *(covered by `train-eval-overlap` / `cross-dataset-overlap` with renamed flags; dedicated rule is a follow-up)*
 - `system-prompt-leaks-eval-instructions`.
 
 **Pipeline code**
@@ -140,21 +146,22 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
 
 1. Skeleton + tree-sitter Python. ✓
 2. JSONL streaming reader with row-pointer findings. ✓
-3. Five rules (mix of code + data + leakage). ✓ (fifteen)
+3. Five rules (mix of code + data + leakage). ✓ (sixteen)
 4. HTML report. ✓
 5. CI on a public RLHF corpus (e.g. HH-RLHF, UltraFeedback) — hand-label to compare. *(internal smoke corpus covers regression at small scale; full public-corpus run is a follow-up)*
 
 ## Stretch
 
 - **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
-- **Cross-dataset analysis** — three datasets in, find which have overlapping prompts (current `train-eval-overlap` is the 2-way special case).
 - **Active suggestion** — propose specific rows to drop, with reasons.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
 - **Explicit schema declarations** — turn `optional-field-required-by-downstream` from a presence-ratio heuristic into a literal schema-vs-data check.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
-- **Per-field distribution shifts in diff mode** — top values changed, length percentiles, language mix.
+- **Length percentiles + language mix** in diff mode — value-distribution shifts landed; per-field length and language profiles are next.
+- **JSON output** for diff mode — currently text-only.
 - **LSP `textDocument/didChange` incremental sync** — currently full-sync only.
 - **MCP `resources/*` and `prompts/*`** — expose fixtures, rule explanations.
+- **Configurable cross-dataset anchor side** — currently every overlap is anchored on the lex-later dataset.
 
 ## Why this is the right shape
 
