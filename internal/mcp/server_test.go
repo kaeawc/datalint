@@ -117,13 +117,24 @@ func TestServer_ToolsListReportsLint(t *testing.T) {
 	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(result.Tools) != 1 {
-		t.Fatalf("tools count = %d, want 1", len(result.Tools))
+	var lintTool *struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		InputSchema struct {
+			Type       string         `json:"type"`
+			Properties map[string]any `json:"properties"`
+		} `json:"inputSchema"`
 	}
-	if result.Tools[0].Name != "lint" {
-		t.Errorf("tool name = %q, want lint", result.Tools[0].Name)
+	for i := range result.Tools {
+		if result.Tools[i].Name == "lint" {
+			lintTool = &result.Tools[i]
+			break
+		}
 	}
-	if _, ok := result.Tools[0].InputSchema.Properties["paths"]; !ok {
+	if lintTool == nil {
+		t.Fatalf("tools/list missing 'lint' tool: %+v", result.Tools)
+	}
+	if _, ok := lintTool.InputSchema.Properties["paths"]; !ok {
 		t.Errorf("inputSchema missing 'paths' property")
 	}
 }
@@ -162,6 +173,100 @@ func TestServer_ToolsCallLintReturnsFindings(t *testing.T) {
 	}
 	if !strings.Contains(result.Content[0].Text, "random-seed-not-set") {
 		t.Errorf("expected random-seed-not-set finding in text:\n%s", result.Content[0].Text)
+	}
+}
+
+func TestServer_ToolsListReportsBothLintAndFix(t *testing.T) {
+	id := json.RawMessage(`6`)
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "tools/list", Params: json.RawMessage(`{}`)},
+	})
+	var result struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]bool{}
+	for _, tool := range result.Tools {
+		got[tool.Name] = true
+	}
+	for _, want := range []string{"lint", "fix"} {
+		if !got[want] {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestServer_ToolsCallFixAppliesAndSummarizes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.py")
+	if err := os.WriteFile(path, []byte("import random\n\nrandom.shuffle(data)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id := json.RawMessage(`7`)
+	args, _ := json.Marshal(map[string]any{"paths": []string{path}})
+	params, _ := json.Marshal(map[string]any{"name": "fix", "arguments": json.RawMessage(args)})
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "tools/call", Params: params},
+	})
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	var result struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("isError = true, content = %+v", result.Content)
+	}
+	if !strings.Contains(result.Content[0].Text, "Applied 1 edit(s) across 1 file(s)") {
+		t.Errorf("summary missing or wrong:\n%s", result.Content[0].Text)
+	}
+	if !strings.Contains(result.Content[0].Text, "random-seed-not-set") {
+		t.Errorf("pre-fix findings list missing rule id:\n%s", result.Content[0].Text)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "random.seed(0)") {
+		t.Errorf("file should contain seed call after fix:\n%s", got)
+	}
+}
+
+func TestServer_ToolsCallFixOnCleanCorpusReportsZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clean.py")
+	if err := os.WriteFile(path, []byte("import os\n\nprint('hi')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id := json.RawMessage(`8`)
+	args, _ := json.Marshal(map[string]any{"paths": []string{path}})
+	params, _ := json.Marshal(map[string]any{"name": "fix", "arguments": json.RawMessage(args)})
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "tools/call", Params: params},
+	})
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Applied 0 edit(s) across 0 file(s)") {
+		t.Errorf("clean corpus should report zero edits, got:\n%s", result.Content[0].Text)
 	}
 }
 
