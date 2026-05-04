@@ -294,8 +294,8 @@ func TestWriteText_RendersDistributionSection(t *testing.T) {
 	for _, want := range []string{
 		"field distributions",
 		"label:",
-		"old top: [good:3, bad:1]",
-		"new top: [medium:2, good:1]",
+		"old top:    [good:3, bad:1]",
+		"new top:    [medium:2, good:1]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -313,6 +313,112 @@ func TestWriteText_OmitsDistributionSectionWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "field distributions") {
 		t.Errorf("section should be omitted when no distributions:\n%s", buf.String())
+	}
+}
+
+func TestCompute_LengthStatsForCommonField(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	// Old "label": values of length 4, 4, 3, 4 — sorted: [3, 4, 4, 4]
+	//   mean = 15/4 = 3.75; p50 = sorted[2] = 4; p90 = sorted[3] = 4
+	// New "label": lengths 6, 6, 4 — sorted: [4, 6, 6]
+	//   mean = 16/3 ≈ 5.33; p50 = sorted[1] = 6; p90 = sorted[2] = 6
+	writeJSONL(t, oldPath,
+		"{\"label\": \"good\"}\n"+
+			"{\"label\": \"good\"}\n"+
+			"{\"label\": \"bad\"}\n"+
+			"{\"label\": \"good\"}\n")
+	writeJSONL(t, newPath,
+		"{\"label\": \"medium\"}\n"+
+			"{\"label\": \"medium\"}\n"+
+			"{\"label\": \"good\"}\n")
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Distributions) != 1 {
+		t.Fatalf("distributions = %d, want 1", len(r.Distributions))
+	}
+	fd := r.Distributions[0]
+
+	if fd.OldLength.Count != 4 {
+		t.Errorf("old count = %d, want 4", fd.OldLength.Count)
+	}
+	if fd.OldLength.Mean != 3.75 {
+		t.Errorf("old mean = %f, want 3.75", fd.OldLength.Mean)
+	}
+	if fd.OldLength.P50 != 4 {
+		t.Errorf("old p50 = %d, want 4", fd.OldLength.P50)
+	}
+	if fd.OldLength.P90 != 4 {
+		t.Errorf("old p90 = %d, want 4", fd.OldLength.P90)
+	}
+
+	if fd.NewLength.Count != 3 {
+		t.Errorf("new count = %d, want 3", fd.NewLength.Count)
+	}
+	if fd.NewLength.P50 != 6 {
+		t.Errorf("new p50 = %d, want 6", fd.NewLength.P50)
+	}
+	if fd.NewLength.P90 != 6 {
+		t.Errorf("new p90 = %d, want 6", fd.NewLength.P90)
+	}
+}
+
+func TestWriteText_RendersLengthLines(t *testing.T) {
+	r := diff.Report{
+		OldPath: "a", NewPath: "b", OldRows: 1, NewRows: 1,
+		Common: []string{"label"},
+		Distributions: []diff.FieldDistribution{{
+			Field:     "label",
+			OldTop:    []diff.ValueCount{{Value: "good", Count: 1}},
+			NewTop:    []diff.ValueCount{{Value: "medium", Count: 1}},
+			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, P50: 4, P90: 4},
+			NewLength: diff.LengthStats{Count: 1, Mean: 6.0, P50: 6, P90: 6},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := diff.WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"old length: count=1 mean=4.0 p50=4 p90=4",
+		"new length: count=1 mean=6.0 p50=6 p90=6",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteText_OmitsLengthLineWhenCountZero(t *testing.T) {
+	// When one side has the field but it's never a string (or the
+	// field appears in only one version), the other side's length
+	// section should be omitted instead of rendering "count=0".
+	r := diff.Report{
+		OldPath: "a", NewPath: "b",
+		Common: []string{"label"},
+		Distributions: []diff.FieldDistribution{{
+			Field:     "label",
+			OldTop:    []diff.ValueCount{{Value: "good", Count: 1}},
+			OldLength: diff.LengthStats{Count: 1, Mean: 4.0, P50: 4, P90: 4},
+			// NewLength left zero-valued.
+		}},
+	}
+	var buf bytes.Buffer
+	if err := diff.WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "old length:") {
+		t.Errorf("expected 'old length:' line:\n%s", out)
+	}
+	if strings.Contains(out, "new length:") {
+		t.Errorf("'new length:' should be omitted when count=0:\n%s", out)
 	}
 }
 

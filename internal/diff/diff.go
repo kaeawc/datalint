@@ -41,12 +41,28 @@ type Report struct {
 }
 
 // FieldDistribution carries the top-K most frequent string values
-// for one shared field, in each version. Lists are sorted by count
-// descending, ties broken alphabetically for stable output.
+// and character-length stats for one shared field, in each version.
+// Top lists are sorted by count descending, ties broken alphabetically
+// for stable output. LengthStats are computed over every string
+// occurrence of the field (not just top-K).
 type FieldDistribution struct {
-	Field  string
-	OldTop []ValueCount
-	NewTop []ValueCount
+	Field     string
+	OldTop    []ValueCount
+	NewTop    []ValueCount
+	OldLength LengthStats
+	NewLength LengthStats
+}
+
+// LengthStats summarises character-length distribution per field.
+// Count is the number of string occurrences; Mean / P50 / P90 are
+// computed only when Count > 0. Percentiles use a simple
+// floor(N*p)-th element after sorting — no interpolation, fine for
+// the small N this typically runs on.
+type LengthStats struct {
+	Count int
+	Mean  float64
+	P50   int
+	P90   int
 }
 
 // ValueCount pairs a string value with its row count.
@@ -56,9 +72,12 @@ type ValueCount struct {
 }
 
 // fileStats are the running counts scanFields collects per file.
+// lengths records every string occurrence's character length so the
+// final pass can compute percentiles per field.
 type fileStats struct {
-	fields map[string]bool
-	values map[string]map[string]int // field -> value -> count
+	fields  map[string]bool
+	values  map[string]map[string]int // field -> value -> count
+	lengths map[string][]int          // field -> per-occurrence char lengths
 }
 
 // Compute streams both files once each, recording the set of
@@ -84,15 +103,16 @@ func Compute(oldPath, newPath string) (Report, error) {
 		Added:         sortedDiff(newStats.fields, oldStats.fields),
 		Removed:       sortedDiff(oldStats.fields, newStats.fields),
 		Common:        common,
-		Distributions: buildDistributions(common, oldStats.values, newStats.values),
+		Distributions: buildDistributions(common, oldStats, newStats),
 	}, nil
 }
 
 func scanFields(path string) (int, fileStats, error) {
 	rows := 0
 	stats := fileStats{
-		fields: map[string]bool{},
-		values: map[string]map[string]int{},
+		fields:  map[string]bool{},
+		values:  map[string]map[string]int{},
+		lengths: map[string][]int{},
 	}
 	err := scanner.StreamJSONL(path, func(_ int, line []byte) error {
 		recordRow(&rows, &stats, line)
@@ -123,6 +143,7 @@ func recordRow(rows *int, stats *fileStats, line []byte) {
 			stats.values[k] = map[string]int{}
 		}
 		stats.values[k][s]++
+		stats.lengths[k] = append(stats.lengths[k], len(s))
 	}
 }
 
@@ -130,11 +151,11 @@ func recordRow(rows *int, stats *fileStats, line []byte) {
 // where neither side blew past MaxDistinctForDistribution. Fields
 // with no string occurrences in either version are skipped — the
 // value count would be zero on both sides.
-func buildDistributions(common []string, oldVals, newVals map[string]map[string]int) []FieldDistribution {
+func buildDistributions(common []string, oldStats, newStats fileStats) []FieldDistribution {
 	out := make([]FieldDistribution, 0)
 	for _, field := range common {
-		o := oldVals[field]
-		n := newVals[field]
+		o := oldStats.values[field]
+		n := newStats.values[field]
 		if len(o) == 0 && len(n) == 0 {
 			continue
 		}
@@ -143,12 +164,36 @@ func buildDistributions(common []string, oldVals, newVals map[string]map[string]
 			continue
 		}
 		out = append(out, FieldDistribution{
-			Field:  field,
-			OldTop: topByCount(o, TopK),
-			NewTop: topByCount(n, TopK),
+			Field:     field,
+			OldTop:    topByCount(o, TopK),
+			NewTop:    topByCount(n, TopK),
+			OldLength: computeLengthStats(oldStats.lengths[field]),
+			NewLength: computeLengthStats(newStats.lengths[field]),
 		})
 	}
 	return out
+}
+
+// computeLengthStats sorts a copy of lengths and reads the mean,
+// median, and p90. Caller should not mutate the returned struct's
+// state — it's a value, but this is a friendly note.
+func computeLengthStats(lengths []int) LengthStats {
+	if len(lengths) == 0 {
+		return LengthStats{}
+	}
+	sorted := make([]int, len(lengths))
+	copy(sorted, lengths)
+	sort.Ints(sorted)
+	sum := 0
+	for _, n := range sorted {
+		sum += n
+	}
+	return LengthStats{
+		Count: len(sorted),
+		Mean:  float64(sum) / float64(len(sorted)),
+		P50:   sorted[len(sorted)/2],
+		P90:   sorted[(len(sorted)*9)/10],
+	}
 }
 
 // topByCount returns the top-k entries from m sorted by count
@@ -246,12 +291,22 @@ func WriteText(w io.Writer, r Report) error {
 		lines = append(lines, "  field distributions (shared string fields, ≤"+fmt.Sprintf("%d", MaxDistinctForDistribution)+" distinct values):")
 		for _, fd := range r.Distributions {
 			lines = append(lines, fmt.Sprintf("    %s:", fd.Field))
-			lines = append(lines, fmt.Sprintf("      old top: %s", formatValueCounts(fd.OldTop)))
-			lines = append(lines, fmt.Sprintf("      new top: %s", formatValueCounts(fd.NewTop)))
+			lines = append(lines, fmt.Sprintf("      old top:    %s", formatValueCounts(fd.OldTop)))
+			lines = append(lines, fmt.Sprintf("      new top:    %s", formatValueCounts(fd.NewTop)))
+			if fd.OldLength.Count > 0 {
+				lines = append(lines, fmt.Sprintf("      old length: %s", formatLengthStats(fd.OldLength)))
+			}
+			if fd.NewLength.Count > 0 {
+				lines = append(lines, fmt.Sprintf("      new length: %s", formatLengthStats(fd.NewLength)))
+			}
 		}
 	}
 	_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
 	return err
+}
+
+func formatLengthStats(s LengthStats) string {
+	return fmt.Sprintf("count=%d mean=%.1f p50=%d p90=%d", s.Count, s.Mean, s.P50, s.P90)
 }
 
 func formatValueCounts(vc []ValueCount) string {
