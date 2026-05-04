@@ -57,29 +57,48 @@ func Run(in io.Reader, out io.Writer, cfg config.Config) error {
 
 func (s *Server) dispatch(m *Message) error {
 	if m.ID == nil {
-		// Notification. v0 only acts on shutdown; everything else
-		// is a no-op (the spec is permissive about extra notifications).
-		if m.Method == "notifications/cancelled" || m.Method == "shutdown" {
-			return ErrShutdown
-		}
-		return nil
+		return s.handleNotification(m)
 	}
-	switch m.Method {
-	case "initialize":
-		return s.respondInitialize(m)
-	case "tools/list":
-		return s.respondToolsList(m)
-	case "tools/call":
-		return s.respondToolsCall(m)
-	case "resources/list":
-		return s.respondResourcesList(m)
-	case "resources/read":
-		return s.respondResourcesRead(m)
+	if handler := s.requestHandler(m.Method); handler != nil {
+		return handler(m)
 	}
 	return s.respond(m, nil, &RPCError{
 		Code:    -32601,
 		Message: fmt.Sprintf("method not found: %s", m.Method),
 	})
+}
+
+// handleNotification covers the notifications v0 acts on. The spec
+// is permissive about extra notifications, so anything else is a
+// no-op rather than an error.
+func (s *Server) handleNotification(m *Message) error {
+	if m.Method == "notifications/cancelled" || m.Method == "shutdown" {
+		return ErrShutdown
+	}
+	return nil
+}
+
+// requestHandler returns the matching responder for a JSON-RPC
+// request. Pulled out of dispatch so the cyclomatic complexity stays
+// under the gocyclo 10 limit as the method surface grows.
+func (s *Server) requestHandler(method string) func(*Message) error {
+	switch method {
+	case "initialize":
+		return s.respondInitialize
+	case "tools/list":
+		return s.respondToolsList
+	case "tools/call":
+		return s.respondToolsCall
+	case "resources/list":
+		return s.respondResourcesList
+	case "resources/read":
+		return s.respondResourcesRead
+	case "prompts/list":
+		return s.respondPromptsList
+	case "prompts/get":
+		return s.respondPromptsGet
+	}
+	return nil
 }
 
 func (s *Server) respond(req *Message, result json.RawMessage, rpcErr *RPCError) error {
@@ -103,6 +122,7 @@ type initializeResult struct {
 type serverCapabilities struct {
 	Tools     toolsCapability     `json:"tools"`
 	Resources resourcesCapability `json:"resources"`
+	Prompts   promptsCapability   `json:"prompts"`
 }
 
 type toolsCapability struct {
@@ -118,6 +138,11 @@ type resourcesCapability struct {
 	Subscribe   bool `json:"subscribe"`
 }
 
+type promptsCapability struct {
+	// listChanged: false → prompt set is static for the connection.
+	ListChanged bool `json:"listChanged"`
+}
+
 type serverInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -129,6 +154,7 @@ func (s *Server) respondInitialize(m *Message) error {
 		Capabilities: serverCapabilities{
 			Tools:     toolsCapability{ListChanged: false},
 			Resources: resourcesCapability{ListChanged: false, Subscribe: false},
+			Prompts:   promptsCapability{ListChanged: false},
 		},
 		ServerInfo: serverInfo{Name: "datalint-mcp", Version: "dev"},
 	}
