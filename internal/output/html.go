@@ -55,8 +55,8 @@ func buildHTMLView(findings []diag.Finding, version string, now time.Time) htmlV
 		rule := byRule[id]
 		groups = append(groups, htmlGroup{
 			RuleID:        id,
-			SeverityCSS:   htmlSeverityCSS(rule[0].Severity),
-			SeverityLabel: htmlSeverityLabel(rule[0].Severity),
+			SeverityCSS:   rule[0].Severity.String(),
+			SeverityLabel: rule[0].Severity.String(),
 			Count:         len(rule),
 			Findings:      toHTMLFindings(rule),
 		})
@@ -92,30 +92,6 @@ func locationDisplay(loc diag.Location) string {
 		return fmt.Sprintf("%s:%d", loc.Path, line)
 	}
 	return loc.Path
-}
-
-func htmlSeverityCSS(s diag.Severity) string {
-	switch s {
-	case diag.SeverityError:
-		return "error"
-	case diag.SeverityWarning:
-		return "warning"
-	case diag.SeverityInfo:
-		return "info"
-	}
-	return "info"
-}
-
-func htmlSeverityLabel(s diag.Severity) string {
-	switch s {
-	case diag.SeverityError:
-		return "error"
-	case diag.SeverityWarning:
-		return "warning"
-	case diag.SeverityInfo:
-		return "info"
-	}
-	return "info"
 }
 
 const htmlSource = `<!doctype html>
