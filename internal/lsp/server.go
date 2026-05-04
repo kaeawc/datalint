@@ -69,6 +69,8 @@ func (s *Server) handleRequest(m *Message) error {
 	switch m.Method {
 	case "initialize":
 		return s.respondInitialize(m)
+	case "textDocument/codeAction":
+		return s.respondCodeAction(m)
 	case "shutdown":
 		return s.respond(m, json.RawMessage("null"), nil)
 	}
@@ -105,6 +107,7 @@ type initializeResult struct {
 type serverCapabilities struct {
 	TextDocumentSync   int  `json:"textDocumentSync"` // 1 = Full
 	DiagnosticProvider bool `json:"diagnosticProvider,omitempty"`
+	CodeActionProvider bool `json:"codeActionProvider,omitempty"`
 }
 
 type serverInfo struct {
@@ -114,7 +117,7 @@ type serverInfo struct {
 
 func (s *Server) respondInitialize(m *Message) error {
 	result := initializeResult{
-		Capabilities: serverCapabilities{TextDocumentSync: 1, DiagnosticProvider: true},
+		Capabilities: serverCapabilities{TextDocumentSync: 1, DiagnosticProvider: true, CodeActionProvider: true},
 		ServerInfo:   serverInfo{Name: "datalint-lsp", Version: "dev"},
 	}
 	body, err := json.Marshal(result)

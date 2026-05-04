@@ -64,6 +64,7 @@ func TestServer_InitializeHandshake(t *testing.T) {
 		Capabilities struct {
 			TextDocumentSync   int  `json:"textDocumentSync"`
 			DiagnosticProvider bool `json:"diagnosticProvider"`
+			CodeActionProvider bool `json:"codeActionProvider"`
 		} `json:"capabilities"`
 		ServerInfo struct {
 			Name string `json:"name"`
@@ -77,6 +78,9 @@ func TestServer_InitializeHandshake(t *testing.T) {
 	}
 	if !result.Capabilities.DiagnosticProvider {
 		t.Errorf("diagnosticProvider should be true")
+	}
+	if !result.Capabilities.CodeActionProvider {
+		t.Errorf("codeActionProvider should be true")
 	}
 	if result.ServerInfo.Name != "datalint-lsp" {
 		t.Errorf("server name = %q, want datalint-lsp", result.ServerInfo.Name)
