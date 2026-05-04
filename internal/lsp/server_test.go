@@ -73,8 +73,8 @@ func TestServer_InitializeHandshake(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}
-	if result.Capabilities.TextDocumentSync != 1 {
-		t.Errorf("textDocumentSync = %d, want 1", result.Capabilities.TextDocumentSync)
+	if result.Capabilities.TextDocumentSync != 2 {
+		t.Errorf("textDocumentSync = %d, want 2 (Incremental)", result.Capabilities.TextDocumentSync)
 	}
 	if !result.Capabilities.DiagnosticProvider {
 		t.Errorf("diagnosticProvider should be true")

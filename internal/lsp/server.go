@@ -112,7 +112,7 @@ type initializeResult struct {
 }
 
 type serverCapabilities struct {
-	TextDocumentSync   int  `json:"textDocumentSync"` // 1 = Full
+	TextDocumentSync   int  `json:"textDocumentSync"` // 2 = Incremental (also accepts full-document changes)
 	DiagnosticProvider bool `json:"diagnosticProvider,omitempty"`
 	CodeActionProvider bool `json:"codeActionProvider,omitempty"`
 }
@@ -124,7 +124,7 @@ type serverInfo struct {
 
 func (s *Server) respondInitialize(m *Message) error {
 	result := initializeResult{
-		Capabilities: serverCapabilities{TextDocumentSync: 1, DiagnosticProvider: true, CodeActionProvider: true},
+		Capabilities: serverCapabilities{TextDocumentSync: 2, DiagnosticProvider: true, CodeActionProvider: true},
 		ServerInfo:   serverInfo{Name: "datalint-lsp", Version: "dev"},
 	}
 	body, err := json.Marshal(result)
@@ -160,18 +160,22 @@ type didOpenParams struct {
 	} `json:"textDocument"`
 }
 
-// didChangeParams carries one or more contentChanges. With full sync
-// (the only mode v0 advertises), each entry is the entire new buffer
-// text and the server replaces the stored document. Range-based
-// (incremental) entries are ignored — they require maintaining an
-// edit-applying model that's a follow-up.
+// didChangeParams carries one or more contentChanges. The server
+// advertises TextDocumentSync = 2 (Incremental) so each entry is
+// either a full-document replacement (Range == nil) or an
+// incremental edit (Range != nil). Multiple changes are applied in
+// order — each subsequent change's positions reference the buffer
+// after the previous change has landed.
 type didChangeParams struct {
 	TextDocument struct {
 		URI string `json:"uri"`
 	} `json:"textDocument"`
-	ContentChanges []struct {
-		Text string `json:"text"`
-	} `json:"contentChanges"`
+	ContentChanges []contentChange `json:"contentChanges"`
+}
+
+type contentChange struct {
+	Range *lspRange `json:"range,omitempty"`
+	Text  string    `json:"text"`
 }
 
 func (s *Server) didOpen(m *Message) error {
@@ -188,8 +192,11 @@ func (s *Server) didChange(m *Message) error {
 	if !ok || p.TextDocument.URI == "" || len(p.ContentChanges) == 0 {
 		return nil
 	}
-	// Full sync: take the last change's text as the new buffer.
-	s.docs[p.TextDocument.URI] = []byte(p.ContentChanges[len(p.ContentChanges)-1].Text)
+	buf := s.docs[p.TextDocument.URI]
+	for _, ch := range p.ContentChanges {
+		buf = applyContentChange(buf, ch)
+	}
+	s.docs[p.TextDocument.URI] = buf
 	return s.lintBuffer(p.TextDocument.URI)
 }
 
