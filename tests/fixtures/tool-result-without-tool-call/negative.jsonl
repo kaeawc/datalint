@@ -1,0 +1,3 @@
+{"messages": [{"role": "user", "content": "weather?"}, {"role": "assistant", "tool_calls": [{"id": "abc", "type": "function"}]}, {"role": "tool", "tool_call_id": "abc", "content": "sunny"}, {"role": "assistant", "content": "It's sunny."}]}
+{"messages": [{"role": "user", "content": "no tools"}, {"role": "assistant", "content": "hi"}]}
+{"messages": [{"role": "user", "content": "tools but no result"}, {"role": "assistant", "tool_calls": [{"id": "x", "type": "function"}]}]}
