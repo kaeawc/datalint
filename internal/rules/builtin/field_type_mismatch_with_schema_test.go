@@ -163,6 +163,98 @@ func TestFieldTypeMismatchWithSchema_CleanFixtureNoFindings(t *testing.T) {
 	}
 }
 
+func TestFieldTypeMismatchWithSchema_NestedObjectPath(t *testing.T) {
+	// meta.author is declared string. Row 3 has meta.author = 100 (number).
+	// Other rows have valid string authors.
+	path := testutil.Fixture(t, "field-type-mismatch-with-schema/positive-nested.jsonl")
+	cfg := config.Default()
+	cfg.Rules[fieldTypeSchemaRuleID] = map[string]any{
+		"field_types": map[string]any{
+			"meta.author": "string",
+		},
+	}
+	got := findingsForRuleAndCfg(t, path, fieldTypeSchemaRuleID, cfg)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding for meta.author; got %d: %s",
+			len(got), joinMessages(got))
+	}
+	if !strings.Contains(got[0].Message, `"meta.author"`) {
+		t.Errorf("message should cite the dotted path: %q", got[0].Message)
+	}
+	if !strings.Contains(got[0].Message, "number") {
+		t.Errorf("message should cite observed type number: %q", got[0].Message)
+	}
+	if got[0].Location.Row != 3 {
+		t.Errorf("row = %d, want 3 (first meta.author=number)", got[0].Location.Row)
+	}
+}
+
+func TestFieldTypeMismatchWithSchema_ArrayElementPath(t *testing.T) {
+	// messages[].role declared string. Row 2 has one role=42 (number).
+	// Row 4 has all-valid roles. Expect one finding citing path with [].
+	path := testutil.Fixture(t, "field-type-mismatch-with-schema/positive-nested.jsonl")
+	cfg := config.Default()
+	cfg.Rules[fieldTypeSchemaRuleID] = map[string]any{
+		"field_types": map[string]any{
+			"messages[].role": "string",
+		},
+	}
+	got := findingsForRuleAndCfg(t, path, fieldTypeSchemaRuleID, cfg)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding for messages[].role; got %d: %s",
+			len(got), joinMessages(got))
+	}
+	if !strings.Contains(got[0].Message, "messages[].role") {
+		t.Errorf("message should cite the array path: %q", got[0].Message)
+	}
+	if got[0].Location.Row != 2 {
+		t.Errorf("row = %d, want 2", got[0].Location.Row)
+	}
+}
+
+func TestFieldTypeMismatchWithSchema_ArrayElementPathCountsAcrossRows(t *testing.T) {
+	// messages[].content declared string. Row 4 has ["multi-part"]
+	// (array). Other rows are clean. Verify the per-element bucket
+	// counts mismatches at the value level, not the row level.
+	path := testutil.Fixture(t, "field-type-mismatch-with-schema/positive-nested.jsonl")
+	cfg := config.Default()
+	cfg.Rules[fieldTypeSchemaRuleID] = map[string]any{
+		"field_types": map[string]any{
+			"messages[].content": "string",
+		},
+	}
+	got := findingsForRuleAndCfg(t, path, fieldTypeSchemaRuleID, cfg)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding; got %d: %s", len(got), joinMessages(got))
+	}
+	if !strings.Contains(got[0].Message, "array") {
+		t.Errorf("message should cite observed type array; got %q", got[0].Message)
+	}
+}
+
+func TestFieldTypeMismatchWithSchema_PathDoesntApply(t *testing.T) {
+	// If the schema declares messages[].role: string but messages is
+	// itself a string in some row (i.e. the path doesn't apply), the
+	// rule must NOT fire on that path — only the path that DOES match
+	// (declaring messages: array) would catch it.
+	path := testutil.Fixture(t, "field-type-mismatch-with-schema/positive-nested.jsonl")
+	cfg := config.Default()
+	cfg.Rules[fieldTypeSchemaRuleID] = map[string]any{
+		"field_types": map[string]any{
+			// messages is always an array in our fixture, so this is a
+			// useful negative — paths that don't apply yield no
+			// findings when the underlying type is fine.
+			"messages[].role": "string",
+		},
+	}
+	got := findingsForRuleAndCfg(t, path, fieldTypeSchemaRuleID, cfg)
+	for _, f := range got {
+		if !strings.Contains(f.Message, "messages[].role") {
+			t.Errorf("only messages[].role should fire; got %q", f.Message)
+		}
+	}
+}
+
 func TestFieldTypeMismatchWithSchema_InvalidDeclaredTypeIgnored(t *testing.T) {
 	// "integer" is not one of the supported tags; the rule silently
 	// ignores it rather than failing. The valid "score: number"
