@@ -9,7 +9,9 @@ datalint is a Krit-shaped static analyzer for training-data pipelines: it lints 
 ## Quickstart
 
 ```bash
-make build                                                       # produces ./datalint
+make build                                                       # builds ./datalint, ./datalint-lsp, ./datalint-mcp
+
+# CLI
 ./datalint tests/fixtures/jsonl-malformed-line/positive.jsonl    # JSON output by default
 ./datalint --format=html  ...  > report.html                     # self-contained HTML
 ./datalint --format=sarif ...                                    # SARIF 2.1.0 for code-scanning
@@ -17,6 +19,11 @@ make build                                                       # produces ./da
 ./datalint --config datalint.yml ...                             # custom thresholds & filters
 ./datalint --fix path/to/pipeline.py                             # apply auto-fixes in place
 ./datalint --fail-on=error --min-severity=warning ...            # CI exit codes + display filter
+./datalint --diff-old old.jsonl --diff-new new.jsonl             # row count + field set delta
+
+# IDE / agent integrations (JSON-RPC over stdio)
+./datalint-lsp                                                   # Language Server Protocol
+./datalint-mcp                                                   # Model Context Protocol
 ```
 
 A representative `datalint.yml`:
@@ -44,6 +51,9 @@ rules:
     extra_patterns:
       - "(?i)reply with one of"
       - "MMLU"
+  privacy-pii-detected:
+    extra_patterns:
+      - "internal-id=INT-\\d{6,}"
 ```
 
 In-source / in-data suppression:
@@ -58,7 +68,7 @@ random.shuffle(data)  # datalint:disable=random-seed-not-set
 
 ## Status
 
-Fourteen rules across all five README categories. Configurable thresholds, enable/disable lists, three output formats, MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`.
+Fifteen rules across all five README categories plus the privacy-scan stretch. Configurable thresholds, enable/disable lists, three output formats, MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode, and live-linting LSP / MCP servers.
 
 | ID | Category | Severity | Confidence | Source | Auto-fix |
 |---|---|---|---|---|---|
@@ -76,8 +86,14 @@ Fourteen rules across all five README categories. Configurable thresholds, enabl
 | `dedup-key-misses-normalization` | pipeline | warning | low | per-file (Python AST) | — |
 | `train-eval-overlap` | leakage | error | high | corpus-scope | — |
 | `system-prompt-leaks-eval-instructions` | leakage | warning | medium | per-file (JSONL) | — |
+| `privacy-pii-detected` | file | error | medium | per-file (JSONL) | — |
 
-Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train` / `--eval` flags. CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering.
+Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train` / `--eval` flags. CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta and field-set delta between two dataset versions.
+
+### IDE / agent integrations
+
+- **`datalint-lsp`** — Language Server speaking JSON-RPC 2.0 over stdio. Capabilities: `textDocumentSync` (Full), `diagnosticProvider`, `codeActionProvider`. Lints on `didOpen` / `didChange` (live, against the in-memory buffer for Python) and `didSave`. Auto-fixes surface as `quickfix` code actions — same edits the CLI's `--fix` would apply.
+- **`datalint-mcp`** — Model Context Protocol server with newline-delimited JSON-RPC 2.0 over stdio. Two tools: `lint` (returns findings as a JSON text block) and `fix` (lints, applies fixes via `internal/fixer`, returns a summary plus the pre-fix findings).
 
 ## Rule taxonomy
 
@@ -105,6 +121,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
 **File-level**
 - `jsonl-malformed-line` — non-JSON line, pinpointed.
 - `parquet-row-group-too-large-for-streaming` — row group's `NumRows` exceeds the streaming-friendly threshold.
+- `privacy-pii-detected` — string fields match email / US SSN / phone / credit-card patterns; project-specific patterns added via `extra_patterns`.
 - `mds-shard-size-imbalanced` — *(not yet implemented; needs MDS reader)*
 
 ## Architecture
@@ -114,28 +131,30 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
   1. *Code rules* — same shape as Krit, walk Python AST to flag pipeline mistakes.
   2. *Data rules* — stream the dataset, compute row-level + corpus-level stats, emit findings with line/row pointers.
 - **Capability gates** — `NeedsCorpusScan`, `NeedsLSH`, `NeedsExternalEvalSet`, `NeedsPythonAST`, `NeedsJSONL`, `NeedsParquet`. Declared on each rule; the dispatcher routes per-file vs corpus-scope accordingly.
-- **Outputs**: JSON, SARIF 2.1.0, HTML report. LSP and MCP servers are skeletons.
-- **Autofix tiers** — `cosmetic`, `idiomatic`, `semantic`. `random-seed-not-set` emits an `idiomatic` fix; the `--fix` flag applies dedup'd edits in reverse-line order.
+- **Outputs**: JSON, SARIF 2.1.0, HTML report.
+- **Autofix tiers** — `cosmetic`, `idiomatic`, `semantic`. `random-seed-not-set` emits an `idiomatic` fix; the `--fix` flag applies dedup'd edits in reverse-line order. The same fix surfaces through LSP `textDocument/codeAction` and the MCP `fix` tool.
+- **LSP server** — full-sync `didOpen` / `didChange` / `didSave` / `didClose` lifecycle, in-memory buffer store for live linting Python, `quickfix` code actions for fixes in the editor's selected range.
+- **MCP server** — `tools/list` + `tools/call` for `lint` and `fix`; same rule pipeline as the CLI.
 
 ## MVP
 
 1. Skeleton + tree-sitter Python. ✓
 2. JSONL streaming reader with row-pointer findings. ✓
-3. Five rules (mix of code + data + leakage). ✓ (fourteen)
+3. Five rules (mix of code + data + leakage). ✓ (fifteen)
 4. HTML report. ✓
 5. CI on a public RLHF corpus (e.g. HH-RLHF, UltraFeedback) — hand-label to compare. *(internal smoke corpus covers regression at small scale; full public-corpus run is a follow-up)*
 
 ## Stretch
 
-- **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format from the README.
-- **Cross-dataset analysis** — three datasets in, find which have overlapping prompts.
-- **Diff mode** — between two versions of a dataset, show what changed in distribution (label balance, length, language mix).
+- **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
+- **Cross-dataset analysis** — three datasets in, find which have overlapping prompts (current `train-eval-overlap` is the 2-way special case).
 - **Active suggestion** — propose specific rows to drop, with reasons.
-- **Privacy scan** — flag rows with PII patterns that shouldn't be in training data.
-- **LSP / MCP servers** — `cmd/datalint-lsp` and `cmd/datalint-mcp` are skeletons.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
 - **Explicit schema declarations** — turn `optional-field-required-by-downstream` from a presence-ratio heuristic into a literal schema-vs-data check.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
+- **Per-field distribution shifts in diff mode** — top values changed, length percentiles, language mix.
+- **LSP `textDocument/didChange` incremental sync** — currently full-sync only.
+- **MCP `resources/*` and `prompts/*`** — expose fixtures, rule explanations.
 
 ## Why this is the right shape
 
