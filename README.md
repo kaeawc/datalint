@@ -45,6 +45,9 @@ rules:
   optional-field-required-by-downstream:
     min_presence_ratio: 0.95
     min_rows: 50
+    required_fields:        # explicit schema; overrides ratio for these fields
+      - input
+      - output
   train-eval-overlap:
     prompt_field: input
     near_dup_threshold: 0.85
@@ -75,7 +78,7 @@ random.shuffle(data)  # datalint:disable=random-seed-not-set
 
 ## Status
 
-Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, four output formats (JSON / SARIF / HTML / drops), MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts and character-length percentiles (text or JSON), N-way cross-dataset overlap, and live-linting LSP / MCP servers.
+Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, four output formats (JSON / SARIF / HTML / drops), MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts, character-length percentiles, and Unicode-script mix (text or JSON), N-way cross-dataset overlap, and live-linting LSP / MCP servers.
 
 | ID | Category | Severity | Confidence | Source | Auto-fix |
 |---|---|---|---|---|---|
@@ -96,7 +99,7 @@ Sixteen rules across all five README categories. Configurable thresholds, enable
 | `system-prompt-leaks-eval-instructions` | leakage | warning | medium | per-file (JSONL) | — |
 | `privacy-pii-detected` | file | error | medium | per-file (JSONL) | — |
 
-Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal manifest: `path<TAB>row<TAB>rules`). Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, per-field top-value distribution shifts, and linearly-interpolated character-length percentiles (count / mean / min / p50 / p90 / p99 / max); `--diff-format=text|json` (text default).
+Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal manifest: `path<TAB>row<TAB>rules`). Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, per-field top-value distribution shifts, linearly-interpolated character-length percentiles (count / mean / min / p50 / p90 / p99 / max), and per-field Unicode-script mix (Latin / Han / Cyrillic / Hiragana / Katakana / Hangul / Arabic / Hebrew / Devanagari / Greek / Thai / Other); `--diff-format=text|json` (text default).
 
 ### IDE / agent integrations
 
@@ -110,7 +113,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 **Schema discipline**
 - `field-type-mixed-across-rows` — `score` is float in 99% of rows and string in 1%.
-- `optional-field-required-by-downstream` — fields almost-always present (presence-ratio heuristic; explicit-schema declaration is a follow-up).
+- `optional-field-required-by-downstream` — fields almost-always present (presence-ratio heuristic) plus an optional `required_fields` list for strict schema-vs-data checking.
 - `enum-drift` — new label appears mid-file with no schema update.
 
 **Conversation/tool-call hygiene**
@@ -160,9 +163,9 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 - **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
-- **Explicit schema declarations** — turn `optional-field-required-by-downstream` from a presence-ratio heuristic into a literal schema-vs-data check.
+- **Type-level schema declarations** — `required_fields` ships today; declaring "input is a string", "tools is an array" is the next axis.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
-- **Language mix shifts** in diff mode — top-value and length-percentile shifts landed; language profiles are the next data dimension.
+- **Per-language mix beyond script** — the diff reports Unicode-script mix; distinguishing English from German (both Latin) would need a model or wordlist.
 - **More MCP prompts** — `explain-rule`, `draft-fix`, and `review-corpus` ship today; further templates (e.g. a per-finding triage walkthrough) are an open follow-up.
 
 ## Why this is the right shape
