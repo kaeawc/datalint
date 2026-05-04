@@ -44,6 +44,10 @@ func TestSmoke_PerFileCorpus(t *testing.T) {
 		"random-seed-not-set":                   2,
 		"shuffle-after-split":                   1,
 		"dedup-key-misses-normalization":        1,
+		// conversations.jsonl mixes one prompt/completion row with
+		// four messages-array rows. "messages" is present in 4/5
+		// parseable rows = 80% ≥ default min_presence_ratio.
+		"optional-field-required-by-downstream": 1,
 	}
 	assertCounts(t, findings, expected)
 }
