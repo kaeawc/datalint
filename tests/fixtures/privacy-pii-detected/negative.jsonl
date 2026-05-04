@@ -1,0 +1,4 @@
+{"prompt": "What is the capital of France?"}
+{"prompt": "Define photosynthesis in plain language."}
+{"prompt": "Order numbers like 12345 and 67890 should not match credit-card."}
+{"id": 12345, "prompt": "Numeric id field stays numeric"}
