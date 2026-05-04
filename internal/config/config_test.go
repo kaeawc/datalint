@@ -98,6 +98,47 @@ func TestRuleConfig_WrongType(t *testing.T) {
 	}
 }
 
+func TestRuleConfig_StringMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "datalint.yml")
+	body := `rules:
+  field-type-mismatch-with-schema:
+    field_types:
+      input: string
+      score: number
+      tags: array
+      bogus: 42         # non-string value, must be skipped
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := cfg.Rule("field-type-mismatch-with-schema").StringMap("field_types")
+	want := map[string]string{
+		"input": "string",
+		"score": "number",
+		"tags":  "array",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("StringMap len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("StringMap[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestRuleConfig_StringMap_MissingReturnsNil(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Rule("nope").StringMap("missing") != nil {
+		t.Errorf("missing key should return nil")
+	}
+}
+
 func TestLoadDiscovered_Miss(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

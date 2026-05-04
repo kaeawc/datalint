@@ -48,6 +48,12 @@ rules:
     required_fields:        # explicit schema; overrides ratio for these fields
       - input
       - output
+  field-type-mismatch-with-schema:
+    field_types:            # field → JSON type (string|number|boolean|array|object|null)
+      input: string
+      output: string
+      score: number
+      tags: array
   train-eval-overlap:
     prompt_field: input
     near_dup_threshold: 0.85
@@ -78,7 +84,7 @@ random.shuffle(data)  # datalint:disable=random-seed-not-set
 
 ## Status
 
-Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, four output formats (JSON / SARIF / HTML / drops), MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts, character-length percentiles, and Unicode-script mix (text or JSON), N-way cross-dataset overlap, and live-linting LSP / MCP servers.
+Seventeen rules across all five README categories. Configurable thresholds, enable/disable lists, four output formats (JSON / SARIF / HTML / drops), MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts, character-length percentiles, and Unicode-script mix (text or JSON), N-way cross-dataset overlap, and live-linting LSP / MCP servers.
 
 | ID | Category | Severity | Confidence | Source | Auto-fix |
 |---|---|---|---|---|---|
@@ -87,6 +93,7 @@ Sixteen rules across all five README categories. Configurable thresholds, enable
 | `field-type-mixed-across-rows` | schema | warning | high | per-file (JSONL) | — |
 | `enum-drift` | schema | warning | medium | per-file (JSONL) | — |
 | `optional-field-required-by-downstream` | schema | warning | medium | per-file (JSONL) | — |
+| `field-type-mismatch-with-schema` | schema | warning | high | per-file (JSONL) | — |
 | `role-inversion` | conversation | error | high | per-file (JSONL) | — |
 | `system-message-mid-conversation` | conversation | error | high | per-file (JSONL) | — |
 | `unbalanced-tool-call-id` | conversation | error | high | per-file (JSONL) | — |
@@ -113,6 +120,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 **Schema discipline**
 - `field-type-mixed-across-rows` — `score` is float in 99% of rows and string in 1%.
+- `field-type-mismatch-with-schema` — declare per-field JSON types in `field_types`; rule fires when an actual value doesn't match the declared type (null counts as a mismatch).
 - `optional-field-required-by-downstream` — fields almost-always present (presence-ratio heuristic) plus an optional `required_fields` list for strict schema-vs-data checking.
 - `enum-drift` — new label appears mid-file with no schema update.
 
@@ -155,7 +163,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 1. Skeleton + tree-sitter Python. ✓
 2. JSONL streaming reader with row-pointer findings. ✓
-3. Five rules (mix of code + data + leakage). ✓ (sixteen)
+3. Five rules (mix of code + data + leakage). ✓ (seventeen)
 4. HTML report. ✓
 5. CI on a public RLHF corpus (e.g. HH-RLHF, UltraFeedback) — hand-label to compare. *(internal smoke corpus covers regression at small scale; full public-corpus run is a follow-up)*
 
@@ -163,7 +171,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 - **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
-- **Type-level schema declarations** — `required_fields` ships today; declaring "input is a string", "tools is an array" is the next axis.
+- **Nested-field schemas** — `required_fields` and per-field `field_types` ship today for top-level keys; declaring shapes for nested objects (e.g. `messages[].role: string`) is the next axis.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
 - **Per-language mix beyond script** — the diff reports Unicode-script mix; distinguishing English from German (both Latin) would need a model or wordlist.
 - **More MCP prompts** — `explain-rule`, `draft-fix`, and `review-corpus` ship today; further templates (e.g. a per-finding triage walkthrough) are an open follow-up.

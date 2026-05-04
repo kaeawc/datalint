@@ -142,6 +142,13 @@ rules:
       - input
       - output
 
+  field-type-mismatch-with-schema:
+    field_types:            # field → JSON type (string|number|boolean|array|object|null)
+      input: string
+      output: string
+      score: number
+      tags: array
+
   train-eval-overlap:
     prompt_field: prompt
     near_dup_threshold: 0   # 0 = exact-match only; 0.85 typical for MinHash near-dup

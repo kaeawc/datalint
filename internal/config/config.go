@@ -143,6 +143,40 @@ func (r RuleConfig) String(key string, def string) string {
 	return s
 }
 
+// StringMap returns a map[string]string at key, or nil if missing.
+// Non-string values are silently skipped. yaml.v3 unmarshalling into
+// map[string]any produces map[string]any for nested mappings; we
+// also accept the older map[any]any shape for resilience.
+func (r RuleConfig) StringMap(key string) map[string]string {
+	if r.values == nil {
+		return nil
+	}
+	raw := r.values[key]
+	out := map[string]string{}
+	switch m := raw.(type) {
+	case map[string]any:
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
+		}
+	case map[any]any:
+		for k, v := range m {
+			ks, kok := k.(string)
+			vs, vok := v.(string)
+			if kok && vok {
+				out[ks] = vs
+			}
+		}
+	default:
+		return nil
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // StringSlice returns the list of strings at key, or nil if missing.
 // Non-string elements in the list are silently skipped.
 func (r RuleConfig) StringSlice(key string) []string {
