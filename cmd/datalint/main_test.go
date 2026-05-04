@@ -38,6 +38,71 @@ func TestParseSeverity(t *testing.T) {
 	}
 }
 
+func TestFilterBySeverity(t *testing.T) {
+	mk := func(s diag.Severity, id string) diag.Finding {
+		return diag.Finding{Severity: s, RuleID: id}
+	}
+	all := []diag.Finding{
+		mk(diag.SeverityInfo, "i"),
+		mk(diag.SeverityWarning, "w"),
+		mk(diag.SeverityError, "e"),
+	}
+
+	cases := []struct {
+		level   string
+		wantIDs []string
+		wantErr bool
+	}{
+		{"none", []string{"i", "w", "e"}, false},
+		{"info", []string{"i", "w", "e"}, false},
+		{"warning", []string{"w", "e"}, false},
+		{"error", []string{"e"}, false},
+		{"critical", nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.level, func(t *testing.T) {
+			got, err := filterBySeverity(all, c.level)
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(c.wantIDs) {
+				t.Fatalf("len = %d, want %d (got %+v)", len(got), len(c.wantIDs), got)
+			}
+			for i, id := range c.wantIDs {
+				if got[i].RuleID != id {
+					t.Errorf("idx %d: got %q, want %q", i, got[i].RuleID, id)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterBySeverity_PreservesUnderlyingForFailOn(t *testing.T) {
+	// Regression: --min-severity must not affect --fail-on.
+	mk := func(s diag.Severity) diag.Finding { return diag.Finding{Severity: s} }
+	findings := []diag.Finding{mk(diag.SeverityInfo), mk(diag.SeverityError)}
+
+	displayed, err := filterBySeverity(findings, "error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(displayed) != 1 {
+		t.Fatalf("expected 1 displayed finding, got %d", len(displayed))
+	}
+	// The original slice must still hold both entries — main.go
+	// passes the unfiltered slice to exitCodeForFailOn after this
+	// filter call.
+	if len(findings) != 2 {
+		t.Fatalf("filterBySeverity mutated input: len(findings) = %d, want 2", len(findings))
+	}
+}
+
 func TestExitCodeForFailOn(t *testing.T) {
 	mk := func(s diag.Severity) diag.Finding { return diag.Finding{Severity: s} }
 	infos := []diag.Finding{mk(diag.SeverityInfo)}
