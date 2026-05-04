@@ -215,6 +215,16 @@ func sortedIntersection(a, b map[string]bool) []string {
 	return out
 }
 
+// WriteJSON marshals the Report as a pretty-printed JSON object so
+// scripted consumers (CI scrapers, dashboards) can parse it the same
+// way they parse `--format=json` findings. Field names follow the Go
+// struct via standard json marshaling — capitalized keys.
+func WriteJSON(w io.Writer, r Report) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(r)
+}
+
 // WriteText renders r as a human-readable summary on w. The trailing
 // distribution section appears only when at least one shared
 // enum-like string field showed up.

@@ -68,6 +68,7 @@ func main() {
 	autoFix := flag.Bool("fix", false, "apply auto-fixes for findings whose rule emits one (modifies files in place)")
 	diffOld := flag.String("diff-old", "", "JSONL path of the old dataset version (paired with --diff-new); enables diff mode and skips the rule pipeline")
 	diffNew := flag.String("diff-new", "", "JSONL path of the new dataset version (paired with --diff-old)")
+	diffFormat := flag.String("diff-format", "text", "diff output format: text or json (default text)")
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
@@ -80,7 +81,7 @@ func main() {
 	}
 
 	if *diffOld != "" || *diffNew != "" {
-		runDiff(*diffOld, *diffNew)
+		runDiff(*diffOld, *diffNew, *diffFormat)
 		return
 	}
 
@@ -152,9 +153,10 @@ func enforceFailOn(level string, findings []diag.Finding) {
 	}
 }
 
-// runDiff handles the --diff-old / --diff-new code path. Both flags
-// must be set; missing one is a configuration error (exit 2).
-func runDiff(oldPath, newPath string) {
+// runDiff handles the --diff-old / --diff-new code path. Both path
+// flags must be set; missing one is a configuration error (exit 2).
+// format selects the output renderer; bad values exit 2 too.
+func runDiff(oldPath, newPath, format string) {
 	if oldPath == "" || newPath == "" {
 		fmt.Fprintln(os.Stderr, "datalint: --diff-old and --diff-new must both be set")
 		os.Exit(2)
@@ -164,10 +166,20 @@ func runDiff(oldPath, newPath string) {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
 	}
-	if err := diff.WriteText(os.Stdout, report); err != nil {
+	if err := writeDiffReport(format, report); err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
+}
+
+func writeDiffReport(format string, report diff.Report) error {
+	switch format {
+	case "text":
+		return diff.WriteText(os.Stdout, report)
+	case "json":
+		return diff.WriteJSON(os.Stdout, report)
+	}
+	return fmt.Errorf("unknown diff format %q (want text or json)", format)
 }
 
 func loadConfig(path string) (config.Config, error) {
