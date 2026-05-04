@@ -2,6 +2,7 @@ package diff_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -312,6 +313,65 @@ func TestWriteText_OmitsDistributionSectionWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "field distributions") {
 		t.Errorf("section should be omitted when no distributions:\n%s", buf.String())
+	}
+}
+
+func TestWriteJSON_RoundTrip(t *testing.T) {
+	r := diff.Report{
+		OldPath: "old.jsonl",
+		NewPath: "new.jsonl",
+		OldRows: 4,
+		NewRows: 5,
+		Added:   []string{"label"},
+		Removed: []string{"score"},
+		Common:  []string{"id", "name"},
+		Distributions: []diff.FieldDistribution{
+			{
+				Field:  "label",
+				OldTop: []diff.ValueCount{{Value: "good", Count: 3}, {Value: "bad", Count: 1}},
+				NewTop: []diff.ValueCount{{Value: "medium", Count: 2}, {Value: "good", Count: 1}},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := diff.WriteJSON(&buf, r); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+
+	var got diff.Report
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
+	}
+	if got.OldPath != r.OldPath || got.NewPath != r.NewPath {
+		t.Errorf("paths round-tripped wrong: got=%+v", got)
+	}
+	if got.OldRows != 4 || got.NewRows != 5 {
+		t.Errorf("rows round-tripped wrong: got=(%d,%d)", got.OldRows, got.NewRows)
+	}
+	if !equalStrings(got.Added, r.Added) || !equalStrings(got.Removed, r.Removed) || !equalStrings(got.Common, r.Common) {
+		t.Errorf("field lists round-tripped wrong: got=%+v", got)
+	}
+	if len(got.Distributions) != 1 {
+		t.Fatalf("distributions len = %d, want 1", len(got.Distributions))
+	}
+	d := got.Distributions[0]
+	if d.Field != "label" {
+		t.Errorf("distribution field = %q, want label", d.Field)
+	}
+	if len(d.OldTop) != 2 || d.OldTop[0].Value != "good" || d.OldTop[0].Count != 3 {
+		t.Errorf("old top round-tripped wrong: %+v", d.OldTop)
+	}
+}
+
+func TestWriteJSON_PrettyPrinted(t *testing.T) {
+	// Pin the indented form so consumers diffing JSON output between
+	// versions don't see spurious whitespace churn.
+	var buf bytes.Buffer
+	if err := diff.WriteJSON(&buf, diff.Report{OldPath: "a", NewPath: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "\n  \"OldPath\"") {
+		t.Errorf("expected 2-space indent on top-level keys; got:\n%s", buf.String())
 	}
 }
 
