@@ -15,11 +15,13 @@ make build                                                       # builds ./data
 ./datalint tests/fixtures/jsonl-malformed-line/positive.jsonl    # JSON output by default
 ./datalint --format=html  ...  > report.html                     # self-contained HTML
 ./datalint --format=sarif ...                                    # SARIF 2.1.0 for code-scanning
+./datalint --format=drops ... | sort -u                          # row-removal manifest: path<TAB>row<TAB>rules
 ./datalint --train train.jsonl --eval eval.jsonl                 # corpus-scope leakage rules
 ./datalint --config datalint.yml ...                             # custom thresholds & filters
 ./datalint --fix path/to/pipeline.py                             # apply auto-fixes in place
 ./datalint --fail-on=error --min-severity=warning ...            # CI exit codes + display filter
-./datalint --diff-old old.jsonl --diff-new new.jsonl             # row count + field set + value distribution delta
+./datalint --diff-old old.jsonl --diff-new new.jsonl             # row count + field set + distribution + length stats
+./datalint --diff-old ... --diff-new ... --diff-format=json      # same diff in JSON for scripted consumers
 ./datalint --dataset train=t.jsonl --dataset eval=e.jsonl ...    # N-way cross-dataset overlap
 
 # IDE / agent integrations (JSON-RPC over stdio)
@@ -72,7 +74,7 @@ random.shuffle(data)  # datalint:disable=random-seed-not-set
 
 ## Status
 
-Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, three output formats, MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts, N-way cross-dataset overlap, and live-linting LSP / MCP servers.
+Sixteen rules across all five README categories. Configurable thresholds, enable/disable lists, four output formats (JSON / SARIF / HTML / drops), MinHash + LSH near-duplicate detection, suppression markers, auto-fix for `random-seed-not-set`, diff mode with per-field distribution shifts and character-length percentiles (text or JSON), N-way cross-dataset overlap, and live-linting LSP / MCP servers.
 
 | ID | Category | Severity | Confidence | Source | Auto-fix |
 |---|---|---|---|---|---|
@@ -93,7 +95,7 @@ Sixteen rules across all five README categories. Configurable thresholds, enable
 | `system-prompt-leaks-eval-instructions` | leakage | warning | medium | per-file (JSONL) | — |
 | `privacy-pii-detected` | file | error | medium | per-file (JSONL) | — |
 
-Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, and per-field top-value distribution shifts for shared enum-like fields.
+Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal manifest: `path<TAB>row<TAB>rules`). Per-rule and global enable/disable via `datalint.yml`. Corpus-scope dispatch via `--train`/`--eval` (2-way) or `--dataset NAME=PATH[,PATH...]` (N-way pairwise). CI: `--fail-on={none,info,warning,error}` for exit codes; `--min-severity={...}` for output filtering. Diff mode: `--diff-old` / `--diff-new` reports row-count delta, field-set delta, per-field top-value distribution shifts, and character-length percentiles (count / mean / p50 / p90); `--diff-format=text|json` (text default).
 
 ### IDE / agent integrations
 
@@ -137,7 +139,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
   1. *Code rules* — same shape as Krit, walk Python AST to flag pipeline mistakes.
   2. *Data rules* — stream the dataset, compute row-level + corpus-level stats, emit findings with line/row pointers.
 - **Capability gates** — `NeedsCorpusScan`, `NeedsLSH`, `NeedsExternalEvalSet`, `NeedsPythonAST`, `NeedsJSONL`, `NeedsParquet`. Declared on each rule; the dispatcher routes per-file vs corpus-scope accordingly.
-- **Outputs**: JSON, SARIF 2.1.0, HTML report.
+- **Outputs**: JSON, SARIF 2.1.0, HTML report, drops (per-row removal manifest).
 - **Autofix tiers** — `cosmetic`, `idiomatic`, `semantic`. `random-seed-not-set` emits an `idiomatic` fix; the `--fix` flag applies dedup'd edits in reverse-line order. The same fix surfaces through LSP `textDocument/codeAction` and the MCP `fix` tool.
 - **LSP server** — full-sync `didOpen` / `didChange` / `didSave` / `didClose` lifecycle, in-memory buffer store for live linting Python, `quickfix` code actions for fixes in the editor's selected range.
 - **MCP server** — `tools/list` + `tools/call` for `lint` and `fix`; same rule pipeline as the CLI.
@@ -153,12 +155,11 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML. Per-rule and global e
 ## Stretch
 
 - **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
-- **Active suggestion** — propose specific rows to drop, with reasons.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
 - **Explicit schema declarations** — turn `optional-field-required-by-downstream` from a presence-ratio heuristic into a literal schema-vs-data check.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
-- **Length percentiles + language mix** in diff mode — value-distribution shifts landed; per-field length and language profiles are next.
-- **JSON output** for diff mode — currently text-only.
+- **Language mix shifts** in diff mode — top-value and length-percentile shifts landed; language profiles are the next data dimension.
+- **Interpolated diff percentiles** — currently nearest-rank; would also add p99 / max / min columns.
 - **LSP `textDocument/didChange` incremental sync** — currently full-sync only.
 - **MCP `resources/*` and `prompts/*`** — expose fixtures, rule explanations.
 - **Configurable cross-dataset anchor side** — currently every overlap is anchored on the lex-later dataset.
