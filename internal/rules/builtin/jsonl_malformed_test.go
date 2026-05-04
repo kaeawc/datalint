@@ -56,6 +56,24 @@ func TestJSONLMalformed_NonJSONLPathSkipped(t *testing.T) {
 	}
 }
 
+func TestJSONLMalformed_DisabledViaConfig(t *testing.T) {
+	// Confirm the dispatcher honors Config.Disable: a rule that would
+	// fire 2 findings on this fixture must produce 0 when listed in
+	// Disable.
+	path := testutil.Fixture(t, "jsonl-malformed-line/positive.jsonl")
+	cfg := config.Default()
+	cfg.Disable = []string{"jsonl-malformed-line"}
+	findings, err := pipeline.Run([]string{path}, cfg)
+	if err != nil {
+		t.Fatalf("pipeline.Run: %v", err)
+	}
+	for _, f := range findings {
+		if f.RuleID == "jsonl-malformed-line" {
+			t.Errorf("disabled rule still fired: %+v", f)
+		}
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

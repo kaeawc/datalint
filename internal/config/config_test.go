@@ -110,6 +110,73 @@ func TestLoadDiscovered_Miss(t *testing.T) {
 	}
 }
 
+func TestIsEnabled_DefaultAllOn(t *testing.T) {
+	cfg := config.Default()
+	if !cfg.IsEnabled("anything") {
+		t.Error("Default config should enable every rule")
+	}
+}
+
+func TestIsEnabled_DisableOnly(t *testing.T) {
+	cfg := config.Config{Disable: []string{"a", "b"}}
+	if cfg.IsEnabled("a") {
+		t.Error("a is in Disable; should be off")
+	}
+	if !cfg.IsEnabled("c") {
+		t.Error("c isn't in Disable; should be on")
+	}
+}
+
+func TestIsEnabled_EnableOnlyAllowList(t *testing.T) {
+	cfg := config.Config{Enable: []string{"a", "b"}}
+	if !cfg.IsEnabled("a") {
+		t.Error("a is in Enable; should be on")
+	}
+	if cfg.IsEnabled("c") {
+		t.Error("Enable is non-empty and c isn't listed; should be off")
+	}
+}
+
+func TestIsEnabled_DisableBeatsEnable(t *testing.T) {
+	cfg := config.Config{
+		Enable:  []string{"a", "b"},
+		Disable: []string{"a"},
+	}
+	if cfg.IsEnabled("a") {
+		t.Error("a is in both lists; Disable wins → off")
+	}
+	if !cfg.IsEnabled("b") {
+		t.Error("b is in Enable, not Disable; should be on")
+	}
+}
+
+func TestLoad_EnableDisable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "datalint.yml")
+	body := `enable:
+  - jsonl-malformed-line
+  - field-type-mixed-across-rows
+disable:
+  - field-type-mixed-across-rows
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.IsEnabled("jsonl-malformed-line") {
+		t.Error("expected jsonl-malformed-line to be on")
+	}
+	if cfg.IsEnabled("field-type-mixed-across-rows") {
+		t.Error("expected field-type-mixed-across-rows to be off (disable wins)")
+	}
+	if cfg.IsEnabled("random-seed-not-set") {
+		t.Error("rule absent from non-empty Enable should be off")
+	}
+}
+
 func TestLoadDiscovered_Hit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "datalint.yml")

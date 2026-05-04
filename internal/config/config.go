@@ -10,15 +10,41 @@ import (
 )
 
 // Config is the parsed datalint configuration. The shape is
-// intentionally permissive: rules read their own keys via Rule(id).
+// intentionally permissive: rules read their own keys via Rule(id),
+// and enable/disable are honored by the dispatcher via IsEnabled.
+//
+// Precedence: a rule in Disable is always off. An empty Enable list
+// means "all rules on" (subject to Disable). A non-empty Enable list
+// means "only these rules on" (still subject to Disable).
 type Config struct {
-	Rules map[string]map[string]any `yaml:"rules"`
+	Rules   map[string]map[string]any `yaml:"rules"`
+	Disable []string                  `yaml:"disable"`
+	Enable  []string                  `yaml:"enable"`
 }
 
 // Default returns an empty Config — every rule falls back to its
-// hardcoded defaults.
+// hardcoded defaults and runs.
 func Default() Config {
 	return Config{Rules: map[string]map[string]any{}}
+}
+
+// IsEnabled reports whether the rule with the given ID should run
+// under this configuration.
+func (c Config) IsEnabled(id string) bool {
+	for _, d := range c.Disable {
+		if d == id {
+			return false
+		}
+	}
+	if len(c.Enable) == 0 {
+		return true
+	}
+	for _, e := range c.Enable {
+		if e == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Load reads and parses a YAML config file at path.
