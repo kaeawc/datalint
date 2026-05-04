@@ -1,0 +1,6 @@
+{"input": "what is 2+2", "score": 0.9, "tags": ["math"]}
+{"input": "what is 3+3", "score": 0.8, "tags": ["math"]}
+{"input": "what is 4+4", "score": "high", "tags": ["math"]}
+{"input": "what is 5+5", "score": 0.95, "tags": "math"}
+{"input": 42, "score": 0.7, "tags": ["math"]}
+{"input": "what is 6+6", "score": null, "tags": ["math"]}
