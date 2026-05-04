@@ -11,7 +11,7 @@ import (
 )
 
 // Run analyzes the given paths against every per-file registered rule.
-func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
+func Run(paths []string, cfg config.Config) ([]diag.Finding, error) {
 	var findings []diag.Finding
 	emit := func(f diag.Finding) { findings = append(findings, f) }
 
@@ -22,6 +22,7 @@ func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
 			if !rule.AppliesTo(ctx.File) {
 				continue
 			}
+			ctx.Settings = cfg.Rule(rule.ID)
 			rule.Check(ctx, emit)
 		}
 	}
@@ -31,7 +32,7 @@ func Run(paths []string, _ config.Config) ([]diag.Finding, error) {
 // RunCorpus runs every corpus-scope rule once against the supplied
 // CorpusContext. Returns nil findings when no corpus-scope rules are
 // registered or the context has no train/eval input.
-func RunCorpus(corpus *rules.CorpusContext, _ config.Config) []diag.Finding {
+func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
 	if corpus == nil || (len(corpus.Train) == 0 && len(corpus.Eval) == 0) {
 		return nil
 	}
@@ -41,6 +42,7 @@ func RunCorpus(corpus *rules.CorpusContext, _ config.Config) []diag.Finding {
 		if !rule.IsCorpusScope() {
 			continue
 		}
+		corpus.Settings = cfg.Rule(rule.ID)
 		rule.CorpusCheck(corpus, emit)
 	}
 	return findings

@@ -30,6 +30,7 @@ func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	format := flag.String("format", "json", "output format: json, sarif, or html")
+	configPath := flag.String("config", "", "path to datalint.yml (default: discover datalint.yml or .datalint.yml in cwd)")
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
@@ -39,20 +40,33 @@ func main() {
 		return
 	}
 
-	findings, err := pipeline.Run(flag.Args(), config.Default())
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "datalint:", err)
+		os.Exit(1)
+	}
+
+	findings, err := pipeline.Run(flag.Args(), cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
 	}
 	if len(train) > 0 || len(eval) > 0 {
 		corpus := &rules.CorpusContext{Train: train, Eval: eval}
-		findings = append(findings, pipeline.RunCorpus(corpus, config.Default())...)
+		findings = append(findings, pipeline.RunCorpus(corpus, cfg)...)
 	}
 
 	if err := writeOutput(*format, findings); err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
 	}
+}
+
+func loadConfig(path string) (config.Config, error) {
+	if path != "" {
+		return config.Load(path)
+	}
+	return config.LoadDiscovered()
 }
 
 func writeOutput(format string, findings []diag.Finding) error {
