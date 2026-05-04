@@ -8,6 +8,7 @@ import (
 	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/rules"
 	"github.com/kaeawc/datalint/internal/scanner"
+	"github.com/kaeawc/datalint/internal/suppression"
 )
 
 // Run analyzes the given paths against every per-file registered rule.
@@ -29,7 +30,7 @@ func Run(paths []string, cfg config.Config) ([]diag.Finding, error) {
 			rule.Check(ctx, emit)
 		}
 	}
-	return findings, nil
+	return suppression.Filter(findings), nil
 }
 
 // RunCorpus runs every corpus-scope rule once against the supplied
@@ -51,7 +52,7 @@ func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
 		corpus.Settings = cfg.Rule(rule.ID)
 		rule.CorpusCheck(corpus, emit)
 	}
-	return findings
+	return suppression.Filter(findings)
 }
 
 // buildContext classifies the file and parses it eagerly when the
