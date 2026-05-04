@@ -220,7 +220,12 @@ func TestCompute_DistributionsCommonField(t *testing.T) {
 	}
 }
 
-func TestCompute_DistributionsSkipsHighCardinalityField(t *testing.T) {
+func TestCompute_DistributionsHighCardinalityFieldOmitsTopButKeepsLength(t *testing.T) {
+	// Free-text fields (more than MaxDistinctForDistribution unique
+	// values) get a FieldDistribution entry but with nil OldTop /
+	// NewTop — top-K of thousands isn't useful. Length stats are
+	// always populated when string occurrences exist; they're
+	// useful for free-text fields ("prompts grew 3× longer").
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.jsonl")
 	newPath := filepath.Join(dir, "new.jsonl")
@@ -237,10 +242,23 @@ func TestCompute_DistributionsSkipsHighCardinalityField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fd := range r.Distributions {
-		if fd.Field == "name" {
-			t.Errorf("'name' should be skipped (>%d distinct values)", diff.MaxDistinctForDistribution)
+	var nameDist *diff.FieldDistribution
+	for i := range r.Distributions {
+		if r.Distributions[i].Field == "name" {
+			nameDist = &r.Distributions[i]
+			break
 		}
+	}
+	if nameDist == nil {
+		t.Fatalf("'name' should be in distributions even when high-cardinality (length stats and scripts still informative)")
+	}
+	if len(nameDist.OldTop) != 0 || len(nameDist.NewTop) != 0 {
+		t.Errorf("high-cardinality field should have nil OldTop/NewTop; got old=%v new=%v",
+			nameDist.OldTop, nameDist.NewTop)
+	}
+	if nameDist.OldLength.Count == 0 || nameDist.NewLength.Count == 0 {
+		t.Errorf("length stats should be populated; got old=%+v new=%+v",
+			nameDist.OldLength, nameDist.NewLength)
 	}
 }
 
@@ -294,8 +312,8 @@ func TestWriteText_RendersDistributionSection(t *testing.T) {
 	for _, want := range []string{
 		"field distributions",
 		"label:",
-		"old top:    [good:3, bad:1]",
-		"new top:    [medium:2, good:1]",
+		"old top:     [good:3, bad:1]",
+		"new top:     [medium:2, good:1]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -442,8 +460,8 @@ func TestWriteText_RendersLengthLines(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"old length: count=1 mean=4.0 min=4 p50=4.0 p90=4.0 p99=4.0 max=4",
-		"new length: count=1 mean=6.0 min=6 p50=6.0 p90=6.0 p99=6.0 max=6",
+		"old length:  count=1 mean=4.0 min=4 p50=4.0 p90=4.0 p99=4.0 max=4",
+		"new length:  count=1 mean=6.0 min=6 p50=6.0 p90=6.0 p99=6.0 max=6",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -522,6 +540,118 @@ func TestWriteJSON_RoundTrip(t *testing.T) {
 	}
 	if len(d.OldTop) != 2 || d.OldTop[0].Value != "good" || d.OldTop[0].Count != 3 {
 		t.Errorf("old top round-tripped wrong: %+v", d.OldTop)
+	}
+}
+
+func TestCompute_ScriptMixSurfacedForLongStringField(t *testing.T) {
+	// "text" field crosses MinRunesForScriptMix (50) on each side:
+	// 5 rows × 26 latin letters = 130 latin runes per side. New side
+	// also adds Cyrillic runes → mix shifts from 100% Latin to a
+	// mixed Latin+Cyrillic profile.
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+
+	const latin = "abcdefghijklmnopqrstuvwxyz"
+	const mixedNew = "abcdefghijklmnopqrstuvwxyz" + "пртпр" // 26 Latin + 5 Cyrillic
+	var oldBody, newBody strings.Builder
+	for i := 0; i < 5; i++ {
+		oldBody.WriteString("{\"text\":\"" + latin + "\"}\n")
+		newBody.WriteString("{\"text\":\"" + mixedNew + "\"}\n")
+	}
+	writeJSONL(t, oldPath, oldBody.String())
+	writeJSONL(t, newPath, newBody.String())
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fd *diff.FieldDistribution
+	for i := range r.Distributions {
+		if r.Distributions[i].Field == "text" {
+			fd = &r.Distributions[i]
+			break
+		}
+	}
+	if fd == nil {
+		t.Fatalf("'text' should be in distributions")
+	}
+	if len(fd.OldScripts) != 1 || fd.OldScripts[0].Script != "Latin" {
+		t.Errorf("old scripts should be Latin-only; got %+v", fd.OldScripts)
+	}
+	if len(fd.NewScripts) < 2 {
+		t.Fatalf("new scripts should include both Latin and Cyrillic; got %+v", fd.NewScripts)
+	}
+	if fd.NewScripts[0].Script != "Latin" {
+		t.Errorf("new scripts should rank Latin first; got %+v", fd.NewScripts)
+	}
+	var cyrillicCount int
+	for _, sc := range fd.NewScripts {
+		if sc.Script == "Cyrillic" {
+			cyrillicCount = sc.Count
+		}
+	}
+	if cyrillicCount != 25 { // 5 rows × 5 cyrillic letters
+		t.Errorf("expected 25 Cyrillic runes (5×5); got %d", cyrillicCount)
+	}
+}
+
+func TestCompute_ScriptMixSuppressedForShortField(t *testing.T) {
+	// Short enum fields (sum of letters < MinRunesForScriptMix on
+	// BOTH sides) get nil OldScripts/NewScripts to avoid noise.
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	newPath := filepath.Join(dir, "new.jsonl")
+	writeJSONL(t, oldPath, "{\"label\":\"good\"}\n{\"label\":\"bad\"}\n")
+	writeJSONL(t, newPath, "{\"label\":\"good\"}\n{\"label\":\"medium\"}\n")
+
+	r, err := diff.Compute(oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fd *diff.FieldDistribution
+	for i := range r.Distributions {
+		if r.Distributions[i].Field == "label" {
+			fd = &r.Distributions[i]
+			break
+		}
+	}
+	if fd == nil {
+		t.Fatalf("'label' should be in distributions")
+	}
+	if fd.OldScripts != nil || fd.NewScripts != nil {
+		t.Errorf("short field should suppress script mix; got old=%+v new=%+v",
+			fd.OldScripts, fd.NewScripts)
+	}
+}
+
+func TestWriteText_RendersScriptLines(t *testing.T) {
+	r := diff.Report{
+		OldPath: "a", NewPath: "b", OldRows: 1, NewRows: 1,
+		Common: []string{"text"},
+		Distributions: []diff.FieldDistribution{{
+			Field: "text",
+			OldScripts: []diff.ScriptCount{
+				{Script: "Latin", Count: 100, Ratio: 1.0},
+			},
+			NewScripts: []diff.ScriptCount{
+				{Script: "Latin", Count: 80, Ratio: 0.8},
+				{Script: "Cyrillic", Count: 20, Ratio: 0.2},
+			},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := diff.WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"old scripts: [Latin:100 (100%)]",
+		"new scripts: [Latin:80 (80%), Cyrillic:20 (20%)]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }
 
