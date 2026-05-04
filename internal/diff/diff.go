@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 
@@ -54,15 +55,20 @@ type FieldDistribution struct {
 }
 
 // LengthStats summarises character-length distribution per field.
-// Count is the number of string occurrences; Mean / P50 / P90 are
-// computed only when Count > 0. Percentiles use a simple
-// floor(N*p)-th element after sorting — no interpolation, fine for
-// the small N this typically runs on.
+// Count is the number of string occurrences; the rest are computed
+// only when Count > 0. Min and Max are the bounds of the sorted
+// occurrences. Percentiles use linear interpolation against the
+// sorted vector (rank = p * (N-1); result blends the floor and ceil
+// elements by the fractional rank), so P50 of [4, 6] is 5.0 rather
+// than the nearest-rank 4 or 6.
 type LengthStats struct {
 	Count int
 	Mean  float64
-	P50   int
-	P90   int
+	Min   int
+	P50   float64
+	P90   float64
+	P99   float64
+	Max   int
 }
 
 // ValueCount pairs a string value with its row count.
@@ -174,9 +180,10 @@ func buildDistributions(common []string, oldStats, newStats fileStats) []FieldDi
 	return out
 }
 
-// computeLengthStats sorts a copy of lengths and reads the mean,
-// median, and p90. Caller should not mutate the returned struct's
-// state — it's a value, but this is a friendly note.
+// computeLengthStats sorts a copy of lengths and computes mean,
+// min, max, and the linearly-interpolated p50 / p90 / p99. Caller
+// should not mutate the returned struct's state — it's a value, but
+// this is a friendly note.
 func computeLengthStats(lengths []int) LengthStats {
 	if len(lengths) == 0 {
 		return LengthStats{}
@@ -191,9 +198,33 @@ func computeLengthStats(lengths []int) LengthStats {
 	return LengthStats{
 		Count: len(sorted),
 		Mean:  float64(sum) / float64(len(sorted)),
-		P50:   sorted[len(sorted)/2],
-		P90:   sorted[(len(sorted)*9)/10],
+		Min:   sorted[0],
+		P50:   interpolatedPercentile(sorted, 0.50),
+		P90:   interpolatedPercentile(sorted, 0.90),
+		P99:   interpolatedPercentile(sorted, 0.99),
+		Max:   sorted[len(sorted)-1],
 	}
+}
+
+// interpolatedPercentile returns p (in [0, 1]) of sorted using the
+// linear-interpolation method: rank = p * (N-1), then blend the
+// floor and ceil elements by the fractional rank. For N = 1 it
+// degenerates to the single value. Caller passes a sorted slice.
+func interpolatedPercentile(sorted []int, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return float64(sorted[0])
+	}
+	rank := p * float64(len(sorted)-1)
+	low := int(math.Floor(rank))
+	high := int(math.Ceil(rank))
+	if low == high {
+		return float64(sorted[low])
+	}
+	frac := rank - float64(low)
+	return float64(sorted[low]) + frac*float64(sorted[high]-sorted[low])
 }
 
 // topByCount returns the top-k entries from m sorted by count
@@ -306,7 +337,8 @@ func WriteText(w io.Writer, r Report) error {
 }
 
 func formatLengthStats(s LengthStats) string {
-	return fmt.Sprintf("count=%d mean=%.1f p50=%d p90=%d", s.Count, s.Mean, s.P50, s.P90)
+	return fmt.Sprintf("count=%d mean=%.1f min=%d p50=%.1f p90=%.1f p99=%.1f max=%d",
+		s.Count, s.Mean, s.Min, s.P50, s.P90, s.P99, s.Max)
 }
 
 func formatValueCounts(vc []ValueCount) string {
