@@ -1,0 +1,3 @@
+{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}
+{"messages": [{"role": "user", "content": "x"}, {"role": "assistant", "content": "first"}, {"role": "assistant", "content": "second"}], "_datalint_disable": ["role-inversion"]}
+{"messages": [{"role": "user", "content": "y"}, {"role": "assistant", "content": "first"}, {"role": "assistant", "content": "second"}]}
