@@ -104,7 +104,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 - **`datalint-mcp`** — Model Context Protocol server with newline-delimited JSON-RPC 2.0 over stdio. Surface:
   - **Tools**: `lint` (returns findings as a JSON text block) and `fix` (lints, applies fixes via `internal/fixer`, returns a summary plus the pre-fix findings).
   - **Resources**: `datalint:rules/index` (Markdown table of every registered rule) and `datalint:config/example` (annotated `datalint.yml` covering every config knob).
-  - **Prompts**: `explain-rule` — takes a `rule_id` argument and returns a system+user message pair the agent uses to explain the rule's bug class, why it matters, and what to do when it fires.
+  - **Prompts**: three templates that return system+user message pairs for the agent to specialize on. `explain-rule` (`rule_id`) — explain a rule's bug class, why it matters, and what to do when it fires. `draft-fix` (`rule_id`, `path`, optional `line` / `row` / `message`) — draft a unified-diff patch for code findings or a row replacement/removal for data findings. `review-corpus` (`paths`, optional `dataset_names` / `goals`) — suggest a starting datalint configuration plus the CLI commands to run on the listed corpus.
 
 ## Rule taxonomy
 
@@ -146,7 +146,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 - **Outputs**: JSON, SARIF 2.1.0, HTML report, drops (per-row removal manifest).
 - **Autofix tiers** — `cosmetic`, `idiomatic`, `semantic`. `random-seed-not-set` emits an `idiomatic` fix; the `--fix` flag applies dedup'd edits in reverse-line order. The same fix surfaces through LSP `textDocument/codeAction` and the MCP `fix` tool.
 - **LSP server** — full-sync `didOpen` / `didChange` / `didSave` / `didClose` lifecycle, in-memory buffer store for live linting Python, `quickfix` code actions for fixes in the editor's selected range.
-- **MCP server** — `tools/list` + `tools/call` for `lint` and `fix`; `resources/list` + `resources/read` for the rules-index Markdown and the annotated config example; `prompts/list` + `prompts/get` for the `explain-rule` prompt template. Same rule pipeline as the CLI.
+- **MCP server** — `tools/list` + `tools/call` for `lint` and `fix`; `resources/list` + `resources/read` for the rules-index Markdown and the annotated config example; `prompts/list` + `prompts/get` for `explain-rule`, `draft-fix`, and `review-corpus`. Same rule pipeline as the CLI.
 
 ## MVP
 
@@ -165,8 +165,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 - **Language mix shifts** in diff mode — top-value and length-percentile shifts landed; language profiles are the next data dimension.
 - **Interpolated diff percentiles** — currently nearest-rank; would also add p99 / max / min columns.
 - **LSP `textDocument/didChange` incremental sync** — currently full-sync only.
-- **More MCP prompts** — currently only `explain-rule` ships; obvious next-ups are `draft-fix` (given a finding, draft a code patch) and `review-corpus` (suggest config + paths).
-- **Sharing severity / confidence / fix-level enum→string helpers** across LSP / MCP / SARIF / output formatters — each layer currently has its own tiny mapping.
+- **More MCP prompts** — `explain-rule`, `draft-fix`, and `review-corpus` ship today; further templates (e.g. a per-finding triage walkthrough) are an open follow-up.
 
 ## Why this is the right shape
 
