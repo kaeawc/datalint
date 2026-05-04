@@ -56,16 +56,22 @@ func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
 }
 
 // buildContext classifies the file and parses it eagerly when the
-// Kind needs project-supplied state (e.g. PythonFile). Parse and read
-// failures leave Python nil; rules that depend on it skip such files.
-// A future "file-unreadable" rule will surface these as findings
-// instead of silently dropping them.
+// Kind needs project-supplied state (e.g. PythonFile, ParquetFile).
+// Parse and read failures leave the corresponding context field nil;
+// rules that depend on it skip such files. A future "file-unreadable"
+// rule will surface these as findings instead of silently dropping
+// them.
 func buildContext(path string) *rules.Context {
 	file := scanner.Classify(path)
 	ctx := &rules.Context{File: file}
-	if file.Kind == scanner.KindPythonSource {
+	switch file.Kind {
+	case scanner.KindPythonSource:
 		if py, err := scanner.ParsePython(path); err == nil {
 			ctx.Python = py
+		}
+	case scanner.KindParquet:
+		if pq, err := scanner.ParseParquet(path); err == nil {
+			ctx.Parquet = pq
 		}
 	}
 	return ctx
