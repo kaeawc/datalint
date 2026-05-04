@@ -105,6 +105,28 @@ func (r RuleConfig) Int(key string, def int) int {
 	return def
 }
 
+// Float returns the float64 value at key or def if missing or
+// wrong-typed. Accepts ints transparently so YAML scalars like 0
+// or 1 read fine into a float-shaped knob.
+func (r RuleConfig) Float(key string, def float64) float64 {
+	if r.values == nil {
+		return def
+	}
+	v, ok := r.values[key]
+	if !ok {
+		return def
+	}
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int:
+		return float64(x)
+	case int64:
+		return float64(x)
+	}
+	return def
+}
+
 // String returns the string value at key or def if missing or wrong-typed.
 func (r RuleConfig) String(key string, def string) string {
 	if r.values == nil {
