@@ -48,20 +48,27 @@ type fieldPresence struct {
 }
 
 // checkOptionalFieldRequired flags fields that appear in most but
-// not all rows. Such fields are usually either:
+// not all rows. Two paths:
 //
-//  1. effectively required and the schema is mislabeling them as
-//     optional (which downstream consumers will eventually crash on);
-//  2. or the few missing rows are real anomalies worth checking.
+//  1. Explicit schema. When the user declares a `required_fields`
+//     list in config, every row must contain every declared field.
+//     A field with any missing rows fires a finding citing the
+//     missing count. Fields covered by the schema are skipped by
+//     the heuristic path so they don't double-fire.
 //
-// v0 is presence-ratio-based and does not consult an explicit schema
-// declaration. A user-supplied schema declaration is a follow-up.
+//  2. Presence-ratio heuristic. For fields not covered by an
+//     explicit schema, fire when a field is present in ≥
+//     min_presence_ratio but < 100% of rows. The mid-band is
+//     usually either a mislabeled-optional field downstream
+//     consumers will eventually crash on, or a few real anomalies
+//     worth checking.
 func checkOptionalFieldRequired(ctx *rules.Context, emit func(diag.Finding)) {
 	if ctx == nil || ctx.File == nil || ctx.File.Kind != scanner.KindJSONL {
 		return
 	}
 	minPresence := ctx.Settings.Float("min_presence_ratio", optionalFieldMinPresenceDefault)
 	minRows := ctx.Settings.Int("min_rows", optionalFieldMinRowsDefault)
+	requiredFields := ctx.Settings.StringSlice("required_fields")
 	path := ctx.File.Path
 
 	presence := map[string]*fieldPresence{}
@@ -75,7 +82,8 @@ func checkOptionalFieldRequired(ctx *rules.Context, emit func(diag.Finding)) {
 	if totalRows < minRows {
 		return
 	}
-	emitOptionalFieldFindings(presence, totalRows, minPresence, path, emit)
+	emitSchemaRequiredFindings(presence, totalRows, requiredFields, path, emit)
+	emitOptionalFieldFindings(presence, totalRows, minPresence, requiredFields, path, emit)
 }
 
 func recordOptionalFieldRow(presence map[string]*fieldPresence, totalRows *int, row int, line []byte) {
@@ -119,9 +127,49 @@ func recordOptionalFieldRow(presence map[string]*fieldPresence, totalRows *int, 
 	}
 }
 
-func emitOptionalFieldFindings(presence map[string]*fieldPresence, totalRows int, minPresence float64, path string, emit func(diag.Finding)) {
+// emitSchemaRequiredFindings fires for each declared-required
+// field that's missing on any row. A field declared required but
+// never present at all gets a single finding pointing at row 1.
+func emitSchemaRequiredFindings(presence map[string]*fieldPresence, totalRows int, requiredFields []string, path string, emit func(diag.Finding)) {
+	if len(requiredFields) == 0 {
+		return
+	}
+	sorted := append([]string(nil), requiredFields...)
+	sort.Strings(sorted)
+	for _, field := range sorted {
+		p, ok := presence[field]
+		missing := totalRows
+		firstMissingRow := 1
+		if ok {
+			missing = totalRows - p.seenIn
+			if p.firstMissingRow != 0 {
+				firstMissingRow = p.firstMissingRow
+			}
+		}
+		if missing == 0 {
+			continue
+		}
+		emit(diag.Finding{
+			RuleID:   "optional-field-required-by-downstream",
+			Severity: diag.SeverityWarning,
+			Message: fmt.Sprintf(
+				"schema declares %q as required but %d/%d rows are missing it",
+				field, missing, totalRows),
+			Location: diag.Location{Path: path, Row: firstMissingRow},
+		})
+	}
+}
+
+func emitOptionalFieldFindings(presence map[string]*fieldPresence, totalRows int, minPresence float64, requiredFields []string, path string, emit func(diag.Finding)) {
+	skip := make(map[string]bool, len(requiredFields))
+	for _, f := range requiredFields {
+		skip[f] = true
+	}
 	fields := make([]string, 0, len(presence))
 	for k := range presence {
+		if skip[k] {
+			continue
+		}
 		fields = append(fields, k)
 	}
 	sort.Strings(fields)
