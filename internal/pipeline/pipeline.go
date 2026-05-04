@@ -19,6 +19,9 @@ func Run(paths []string, cfg config.Config) ([]diag.Finding, error) {
 	for _, path := range paths {
 		ctx := buildContext(path)
 		for _, rule := range registered {
+			if !cfg.IsEnabled(rule.ID) {
+				continue
+			}
 			if !rule.AppliesTo(ctx.File) {
 				continue
 			}
@@ -40,6 +43,9 @@ func RunCorpus(corpus *rules.CorpusContext, cfg config.Config) []diag.Finding {
 	emit := func(f diag.Finding) { findings = append(findings, f) }
 	for _, rule := range rules.All() {
 		if !rule.IsCorpusScope() {
+			continue
+		}
+		if !cfg.IsEnabled(rule.ID) {
 			continue
 		}
 		corpus.Settings = cfg.Rule(rule.ID)
