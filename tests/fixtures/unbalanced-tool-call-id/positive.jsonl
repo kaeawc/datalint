@@ -1,0 +1,3 @@
+{"messages": [{"role": "user", "content": "weather?"}, {"role": "tool", "tool_call_id": "abc", "content": "sunny"}, {"role": "assistant", "content": "It's sunny."}]}
+{"messages": [{"role": "user", "content": "math"}, {"role": "assistant", "tool_calls": [{"id": "x1", "type": "function"}]}, {"role": "tool", "tool_call_id": "x2", "content": "42"}]}
+{"messages": [{"role": "user", "content": "..."}, {"role": "tool", "tool_call_id": "future", "content": "result"}, {"role": "assistant", "tool_calls": [{"id": "future", "type": "function"}]}]}

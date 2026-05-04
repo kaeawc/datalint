@@ -1,0 +1,4 @@
+{"messages": [{"role": "user", "content": "weather?"}, {"role": "assistant", "tool_calls": [{"id": "abc", "type": "function"}]}, {"role": "tool", "tool_call_id": "abc", "content": "sunny"}, {"role": "assistant", "content": "It's sunny."}]}
+{"messages": [{"role": "user", "content": "two"}, {"role": "assistant", "tool_calls": [{"id": "a", "type": "function"}, {"id": "b", "type": "function"}]}, {"role": "tool", "tool_call_id": "a", "content": "1"}, {"role": "tool", "tool_call_id": "b", "content": "2"}]}
+{"messages": [{"role": "user", "content": "no tools"}, {"role": "assistant", "content": "hi"}]}
+{"messages": [{"role": "user", "content": "x"}, {"role": "tool", "content": "result without an id field"}]}
