@@ -39,10 +39,12 @@ type fuzzyEntry struct {
 }
 
 // trainIndex packages the exact-match map and the optional fuzzy
-// entries together so streamEvalAgainstTrain has one input.
+// entries (with LSH bucketing) together so streamEvalAgainstTrain
+// has one input.
 type trainIndex struct {
 	exact map[string]promptLoc
 	fuzzy []fuzzyEntry
+	lsh   *dedup.LSH
 }
 
 // promptFieldDefault is the JSON field whose trimmed string value
@@ -63,9 +65,10 @@ const promptFieldDefault = "prompt"
 // near_dup_threshold = 0 (default) keeps the original exact-match
 // behavior. With threshold > 0, MinHash signatures (128 hashes,
 // 3-token shingles) are computed for every train prompt and each
-// eval prompt; the train list is scanned linearly per eval row and
-// the best match above threshold is cited. v0 is O(M*N); LSH bands
-// for sublinear lookup are tracked as a follow-up.
+// eval prompt; the train signatures are also indexed in an LSH
+// (32 bands × 4 rows) so each eval row only verifies against
+// candidates that share at least one band-bucket — sublinear in
+// train size for typical thresholds.
 func checkTrainEvalOverlap(ctx *rules.CorpusContext, emit func(diag.Finding)) {
 	if ctx == nil || len(ctx.Train) == 0 || len(ctx.Eval) == 0 {
 		return
@@ -98,7 +101,7 @@ func streamEvalAgainstTrain(p, field string, idx *trainIndex, threshold float64,
 			return nil
 		}
 		if threshold > 0 && mh != nil {
-			if f, sim, hit := bestFuzzyMatch(prompt, mh, idx.fuzzy, threshold); hit {
+			if f, sim, hit := bestFuzzyMatch(prompt, mh, idx, threshold); hit {
 				emit(nearDupFinding(p, row, f.loc, sim))
 			}
 		}
@@ -106,15 +109,16 @@ func streamEvalAgainstTrain(p, field string, idx *trainIndex, threshold float64,
 	})
 }
 
-func bestFuzzyMatch(prompt string, mh *dedup.MinHash, entries []fuzzyEntry, threshold float64) (fuzzyEntry, float64, bool) {
+func bestFuzzyMatch(prompt string, mh *dedup.MinHash, idx *trainIndex, threshold float64) (fuzzyEntry, float64, bool) {
 	sig := mh.Signature(prompt)
 	if sig == nil {
 		return fuzzyEntry{}, 0, false
 	}
+	candidates := idx.lsh.Candidates(sig)
 	bestIdx := -1
 	bestSim := 0.0
-	for i, fe := range entries {
-		sim := dedup.Similarity(sig, fe.sig)
+	for _, i := range candidates {
+		sim := dedup.Similarity(sig, idx.fuzzy[i].sig)
 		if sim > bestSim {
 			bestSim = sim
 			bestIdx = i
@@ -123,7 +127,7 @@ func bestFuzzyMatch(prompt string, mh *dedup.MinHash, entries []fuzzyEntry, thre
 	if bestIdx < 0 || bestSim < threshold {
 		return fuzzyEntry{}, 0, false
 	}
-	return entries[bestIdx], bestSim, true
+	return idx.fuzzy[bestIdx], bestSim, true
 }
 
 func exactFinding(path string, row int, loc promptLoc) diag.Finding {
@@ -150,6 +154,9 @@ func nearDupFinding(path string, row int, loc promptLoc, sim float64) diag.Findi
 
 func buildTrainIndex(paths []string, field string, mh *dedup.MinHash) trainIndex {
 	idx := trainIndex{exact: map[string]promptLoc{}}
+	if mh != nil {
+		idx.lsh = dedup.NewLSH(dedup.DefaultBands, dedup.DefaultRows)
+	}
 	for _, p := range paths {
 		path := p
 		_ = scanner.StreamJSONL(path, func(row int, line []byte) error {
@@ -162,11 +169,13 @@ func buildTrainIndex(paths []string, field string, mh *dedup.MinHash) trainIndex
 			}
 			if mh != nil {
 				if sig := mh.Signature(prompt); sig != nil {
+					entryIdx := len(idx.fuzzy)
 					idx.fuzzy = append(idx.fuzzy, fuzzyEntry{
 						sig: sig,
 						loc: promptLoc{path: path, row: row},
 						raw: prompt,
 					})
+					idx.lsh.Add(entryIdx, sig)
 				}
 			}
 			return nil
