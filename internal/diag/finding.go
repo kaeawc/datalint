@@ -20,10 +20,39 @@ type Location struct {
 	Col  int
 }
 
-// Finding is one diagnostic from one rule.
+// FixLevel describes how aggressive a Fix is. The fixer applies all
+// levels indiscriminately; consumers (humans reading SARIF, the CLI
+// telling the user what changed) use the level to decide trust.
+type FixLevel string
+
+const (
+	FixCosmetic  FixLevel = "cosmetic"
+	FixIdiomatic FixLevel = "idiomatic"
+	FixSemantic  FixLevel = "semantic"
+)
+
+// FixEdit is one localized text insertion. v0 supports pure insertion
+// before a 1-based line number; replacements and deletions are
+// follow-ups. Line=0 means "top of file".
+type FixEdit struct {
+	Line   int
+	Insert string
+}
+
+// Fix is the optional repair attached to a Finding. Description is
+// the human-readable summary the CLI prints when --fix runs.
+type Fix struct {
+	Description string
+	Level       FixLevel
+	Edits       []FixEdit
+}
+
+// Finding is one diagnostic from one rule. Fix is non-nil when the
+// rule offers an automatic repair.
 type Finding struct {
 	RuleID   string
 	Severity Severity
 	Message  string
 	Location Location
+	Fix      *Fix `json:",omitempty"`
 }
