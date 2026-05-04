@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/kaeawc/datalint/internal/diag"
+	"github.com/kaeawc/datalint/internal/fixer"
 	"github.com/kaeawc/datalint/internal/pipeline"
 	"github.com/kaeawc/datalint/internal/rules"
 
@@ -49,6 +50,11 @@ func (s *Server) respondToolsList(m *Message) error {
 			Description: "Run datalint over the supplied per-file paths and/or train/eval splits and return findings.",
 			InputSchema: json.RawMessage(lintInputSchema),
 		},
+		{
+			Name:        "fix",
+			Description: "Run datalint and apply auto-fixes for findings whose rule emits one (e.g. random-seed-not-set). Modifies files in place. Returns a summary plus the pre-fix findings list.",
+			InputSchema: json.RawMessage(lintInputSchema),
+		},
 	}
 	body, err := json.Marshal(map[string]any{"tools": tools})
 	if err != nil {
@@ -86,21 +92,69 @@ func (s *Server) respondToolsCall(m *Message) error {
 	if err := json.Unmarshal(m.Params, &p); err != nil {
 		return s.respond(m, nil, &RPCError{Code: -32602, Message: "invalid params: " + err.Error()})
 	}
-	if p.Name != "lint" {
-		return s.respondToolError(m, fmt.Sprintf("unknown tool: %s", p.Name))
+	args, err := decodeLintArgs(p.Arguments)
+	if err != nil {
+		return s.respondToolError(m, "invalid arguments: "+err.Error())
 	}
+	switch p.Name {
+	case "lint":
+		return s.respondToolLint(m, args)
+	case "fix":
+		return s.respondToolFix(m, args)
+	}
+	return s.respondToolError(m, fmt.Sprintf("unknown tool: %s", p.Name))
+}
+
+func decodeLintArgs(raw json.RawMessage) (lintArgs, error) {
 	var args lintArgs
-	if len(p.Arguments) > 0 {
-		if err := json.Unmarshal(p.Arguments, &args); err != nil {
-			return s.respondToolError(m, "invalid arguments: "+err.Error())
-		}
+	if len(raw) == 0 {
+		return args, nil
 	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return args, err
+	}
+	return args, nil
+}
+
+func (s *Server) respondToolLint(m *Message, args lintArgs) error {
 	findings := s.runLint(args)
 	body, err := buildLintResult(findings)
 	if err != nil {
 		return s.respondToolError(m, err.Error())
 	}
 	return s.respond(m, body, nil)
+}
+
+func (s *Server) respondToolFix(m *Message, args lintArgs) error {
+	findings := s.runLint(args)
+	res, err := fixer.Apply(findings)
+	if err != nil {
+		return s.respondToolError(m, err.Error())
+	}
+	body, err := buildFixResult(findings, res)
+	if err != nil {
+		return s.respondToolError(m, err.Error())
+	}
+	return s.respond(m, body, nil)
+}
+
+// buildFixResult emits a single text block: a one-line summary on
+// top, then the pretty-printed pre-fix findings so the caller knows
+// exactly what was repaired and what's left untouched.
+func buildFixResult(findings []diag.Finding, res fixer.Result) (json.RawMessage, error) {
+	if findings == nil {
+		findings = []diag.Finding{}
+	}
+	body, err := json.MarshalIndent(findings, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	text := fmt.Sprintf("Applied %d edit(s) across %d file(s).\n\nFindings (pre-fix):\n%s",
+		res.EditsApplied, res.FilesModified, string(body))
+	return json.Marshal(toolCallResult{
+		Content: []toolContent{{Type: "text", Text: text}},
+		IsError: false,
+	})
 }
 
 func (s *Server) runLint(args lintArgs) []diag.Finding {
