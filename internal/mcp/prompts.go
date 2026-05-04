@@ -10,8 +10,9 @@ import (
 
 // promptName* are the stable identifiers exposed via prompts/list.
 const (
-	promptNameExplainRule = "explain-rule"
-	promptNameDraftFix    = "draft-fix"
+	promptNameExplainRule  = "explain-rule"
+	promptNameDraftFix     = "draft-fix"
+	promptNameReviewCorpus = "review-corpus"
 )
 
 // promptDescriptor is the MCP shape returned from prompts/list.
@@ -69,6 +70,15 @@ func (s *Server) respondPromptsList(m *Message) error {
 				{Name: "message", Description: "The finding's message text (optional; helps the model phrase the patch).", Required: false},
 			},
 		},
+		{
+			Name:        promptNameReviewCorpus,
+			Description: "Have the model review a corpus shape and suggest a starting datalint configuration plus commands to run.",
+			Arguments: []promptArgument{
+				{Name: "paths", Description: "Comma-separated list of file paths in the corpus (.jsonl, .py, .parquet).", Required: true},
+				{Name: "dataset_names", Description: "Comma-separated dataset/split names if the corpus has named splits (e.g. train,eval,test).", Required: false},
+				{Name: "goals", Description: "What the user is optimizing for (e.g. 'eval-set safety', 'schema stability'); shapes the config recommendation.", Required: false},
+			},
+		},
 	}
 	body, err := json.Marshal(map[string]any{"prompts": prompts})
 	if err != nil {
@@ -92,6 +102,8 @@ func (s *Server) respondPromptsGet(m *Message) error {
 		return s.handleExplainRule(m, p.Arguments)
 	case promptNameDraftFix:
 		return s.handleDraftFix(m, p.Arguments)
+	case promptNameReviewCorpus:
+		return s.handleReviewCorpus(m, p.Arguments)
 	}
 	return s.respond(m, nil, &RPCError{
 		Code:    -32601,
@@ -190,6 +202,38 @@ const draftFixSystemPrompt = `You are a datalint fix author. Given a finding's m
 4. End with a one-line rationale tying the patch back to the rule's bug class.
 
 If the rule doesn't have a typical mechanical fix (e.g., role-inversion is a data quality issue with no automatic patch), say so and suggest the next step the user should take.`
+
+func (s *Server) handleReviewCorpus(m *Message, args map[string]string) error {
+	paths := args["paths"]
+	if paths == "" {
+		return s.respond(m, nil, &RPCError{Code: -32602, Message: "missing required argument: paths"})
+	}
+	return s.respondPromptResult(m,
+		"Review the corpus and suggest a datalint configuration.",
+		reviewCorpusSystemPrompt, reviewCorpusUserPrompt(args))
+}
+
+const reviewCorpusSystemPrompt = `You are a datalint corpus reviewer. Given a list of paths and optional context, suggest a starting datalint configuration and the commands to run:
+
+1. Identify which rules apply: data rules for .jsonl/.parquet paths, code rules for .py paths, leakage rules when the user has multiple splits.
+2. Recommend config thresholds based on the corpus shape and the user's stated goals (or sensible defaults if unspecified).
+3. Provide concrete CLI commands the user can run (lint, fix, diff, train-eval-overlap, cross-dataset-overlap).
+4. Flag obvious gaps — e.g., if the user listed only train and eval but no test split, suggest splitting eval into a held-out portion.
+
+Don't speculate beyond what the user told you. Note assumptions explicitly.`
+
+func reviewCorpusUserPrompt(args map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Paths: %s\n", args["paths"])
+	if names := args["dataset_names"]; names != "" {
+		fmt.Fprintf(&b, "Dataset names: %s\n", names)
+	}
+	if goals := args["goals"]; goals != "" {
+		fmt.Fprintf(&b, "Goals: %s\n", goals)
+	}
+	b.WriteString("\nReview this corpus per the system instructions.")
+	return b.String()
+}
 
 func draftFixUserPrompt(r *rules.Rule, args map[string]string) string {
 	var b strings.Builder

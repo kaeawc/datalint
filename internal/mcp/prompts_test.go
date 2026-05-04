@@ -51,6 +51,149 @@ func TestServer_PromptsListReportsExplainRule(t *testing.T) {
 	}
 }
 
+func TestServer_PromptsListReportsAllThreePrompts(t *testing.T) {
+	id := json.RawMessage(`30`)
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "prompts/list", Params: json.RawMessage(`{}`)},
+	})
+	var result struct {
+		Prompts []struct {
+			Name      string `json:"name"`
+			Arguments []struct {
+				Name     string `json:"name"`
+				Required bool   `json:"required"`
+			} `json:"arguments"`
+		} `json:"prompts"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	names := map[string]bool{}
+	for _, p := range result.Prompts {
+		names[p.Name] = true
+	}
+	for _, want := range []string{"explain-rule", "draft-fix", "review-corpus"} {
+		if !names[want] {
+			t.Errorf("prompts/list missing %q", want)
+		}
+	}
+	// Spot-check review-corpus required vs optional flags.
+	for _, p := range result.Prompts {
+		if p.Name != "review-corpus" {
+			continue
+		}
+		req := map[string]bool{}
+		for _, a := range p.Arguments {
+			req[a.Name] = a.Required
+		}
+		if !req["paths"] {
+			t.Errorf("review-corpus paths should be required")
+		}
+		for _, opt := range []string{"dataset_names", "goals"} {
+			if req[opt] {
+				t.Errorf("review-corpus %q should be optional", opt)
+			}
+		}
+	}
+}
+
+func TestServer_PromptsGetReviewCorpusReturnsMessages(t *testing.T) {
+	id := json.RawMessage(`31`)
+	params, _ := json.Marshal(map[string]any{
+		"name": "review-corpus",
+		"arguments": map[string]string{
+			"paths":         "train.jsonl,eval.jsonl,pipeline.py",
+			"dataset_names": "train,eval",
+			"goals":         "eval-set safety",
+		},
+	})
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "prompts/get", Params: params},
+	})
+	if resps[0].Error != nil {
+		t.Fatalf("unexpected error: %+v", resps[0].Error)
+	}
+	var result struct {
+		Description string `json:"description"`
+		Messages    []struct {
+			Role    string `json:"role"`
+			Content struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("messages count = %d, want 2", len(result.Messages))
+	}
+	if result.Messages[0].Role != "system" || result.Messages[1].Role != "user" {
+		t.Errorf("role sequence = [%s %s], want [system user]",
+			result.Messages[0].Role, result.Messages[1].Role)
+	}
+	user := result.Messages[1].Content.Text
+	for _, want := range []string{
+		"Paths: train.jsonl,eval.jsonl,pipeline.py",
+		"Dataset names: train,eval",
+		"Goals: eval-set safety",
+	} {
+		if !strings.Contains(user, want) {
+			t.Errorf("user message missing %q in:\n%s", want, user)
+		}
+	}
+}
+
+func TestServer_PromptsGetReviewCorpusOmitsOptionalLines(t *testing.T) {
+	id := json.RawMessage(`32`)
+	params, _ := json.Marshal(map[string]any{
+		"name":      "review-corpus",
+		"arguments": map[string]string{"paths": "data.jsonl"},
+	})
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "prompts/get", Params: params},
+	})
+	var result struct {
+		Messages []struct {
+			Content struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(resps[0].Result, &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	user := result.Messages[1].Content.Text
+	if !strings.Contains(user, "Paths: data.jsonl") {
+		t.Errorf("required Paths line missing:\n%s", user)
+	}
+	for _, mustNot := range []string{"Dataset names:", "Goals:"} {
+		if strings.Contains(user, mustNot) {
+			t.Errorf("%q should be omitted when arg not provided:\n%s", mustNot, user)
+		}
+	}
+}
+
+func TestServer_PromptsGetReviewCorpusMissingPathsReturnsError(t *testing.T) {
+	id := json.RawMessage(`33`)
+	params, _ := json.Marshal(map[string]any{
+		"name":      "review-corpus",
+		"arguments": map[string]string{}, // no paths
+	})
+	resps := runOnce(t, []*mcp.Message{
+		{JSONRPC: "2.0", ID: &id, Method: "prompts/get", Params: params},
+	})
+	if resps[0].Error == nil {
+		t.Fatal("expected RPC error for missing paths")
+	}
+	if resps[0].Error.Code != -32602 {
+		t.Errorf("error code = %d, want -32602", resps[0].Error.Code)
+	}
+	if !strings.Contains(resps[0].Error.Message, "paths") {
+		t.Errorf("error message should cite missing paths: %q", resps[0].Error.Message)
+	}
+}
+
 func TestServer_PromptsListReportsBothExplainAndDraftFix(t *testing.T) {
 	id := json.RawMessage(`21`)
 	resps := runOnce(t, []*mcp.Message{
