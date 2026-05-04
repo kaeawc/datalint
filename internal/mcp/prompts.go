@@ -141,9 +141,9 @@ Scope: %s
 Explain this rule per the system instructions.`,
 		r.ID,
 		string(r.Category),
-		severityName(r.Severity),
-		confidenceName(r.Confidence),
-		fixLevelName(r.Fix),
+		r.Severity,
+		r.Confidence,
+		r.Fix,
 		scopeLabel(r),
 	)
 }

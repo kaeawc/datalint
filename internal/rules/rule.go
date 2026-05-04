@@ -31,6 +31,20 @@ const (
 	FixSemantic
 )
 
+// String returns the lowercase name. FixNone renders as "none" so
+// callers don't need a special-case branch.
+func (f FixLevel) String() string {
+	switch f {
+	case FixCosmetic:
+		return "cosmetic"
+	case FixIdiomatic:
+		return "idiomatic"
+	case FixSemantic:
+		return "semantic"
+	}
+	return "none"
+}
+
 // Confidence is the rule's self-reported precision tier.
 type Confidence int
 
@@ -39,6 +53,17 @@ const (
 	ConfidenceMedium
 	ConfidenceHigh
 )
+
+// String returns the lowercase name (low/medium/high).
+func (c Confidence) String() string {
+	switch c {
+	case ConfidenceMedium:
+		return "medium"
+	case ConfidenceHigh:
+		return "high"
+	}
+	return "low"
+}
 
 // Capability flags the project context a rule needs. Rules that do not
 // declare a capability cannot rely on the dispatcher producing it.

@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/kaeawc/datalint/internal/diag"
 	"github.com/kaeawc/datalint/internal/rules"
 )
 
@@ -107,49 +106,13 @@ func buildRulesIndex() string {
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s |\n",
 			r.ID,
 			string(r.Category),
-			severityName(r.Severity),
-			confidenceName(r.Confidence),
-			fixLevelName(r.Fix),
+			r.Severity,
+			r.Confidence,
+			r.Fix,
 			scopeLabel(r),
 		)
 	}
 	return b.String()
-}
-
-func severityName(s diag.Severity) string {
-	switch s {
-	case diag.SeverityError:
-		return "error"
-	case diag.SeverityWarning:
-		return "warning"
-	case diag.SeverityInfo:
-		return "info"
-	}
-	return "?"
-}
-
-func confidenceName(c rules.Confidence) string {
-	switch c {
-	case rules.ConfidenceHigh:
-		return "high"
-	case rules.ConfidenceMedium:
-		return "medium"
-	case rules.ConfidenceLow:
-		return "low"
-	}
-	return "?"
-}
-
-func fixLevelName(f rules.FixLevel) string {
-	switch f {
-	case rules.FixCosmetic:
-		return "cosmetic"
-	case rules.FixIdiomatic:
-		return "idiomatic"
-	case rules.FixSemantic:
-		return "semantic"
-	}
-	return "—"
 }
 
 func scopeLabel(r *rules.Rule) string {

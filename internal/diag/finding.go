@@ -11,6 +11,19 @@ const (
 	SeverityError
 )
 
+// String returns the canonical lowercase name. Output formatters
+// that need a different mapping (SARIF "note" for info, LSP's
+// numeric levels) keep their own helpers.
+func (s Severity) String() string {
+	switch s {
+	case SeverityWarning:
+		return "warning"
+	case SeverityError:
+		return "error"
+	}
+	return "info"
+}
+
 // Location points at the offending position. Line is for source files,
 // Row is for streamed data files (JSONL row index, Parquet row group).
 type Location struct {
