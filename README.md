@@ -49,11 +49,14 @@ rules:
       - input
       - output
   field-type-mismatch-with-schema:
-    field_types:            # field → JSON type (string|number|boolean|array|object|null)
+    field_types:            # path → JSON type (string|number|boolean|array|object|null)
       input: string
       output: string
       score: number
       tags: array
+      meta.author: string             # nested object access
+      messages[].role: string         # array-each-element
+      messages[].content: string
   train-eval-overlap:
     prompt_field: input
     near_dup_threshold: 0.85
@@ -120,7 +123,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 **Schema discipline**
 - `field-type-mixed-across-rows` — `score` is float in 99% of rows and string in 1%.
-- `field-type-mismatch-with-schema` — declare per-field JSON types in `field_types`; rule fires when an actual value doesn't match the declared type (null counts as a mismatch).
+- `field-type-mismatch-with-schema` — declare per-path JSON types in `field_types`; rule fires when an actual value doesn't match the declared type (null counts as a mismatch). Paths support nested objects (`meta.author`) and array-each-element (`messages[].role`).
 - `optional-field-required-by-downstream` — fields almost-always present (presence-ratio heuristic) plus an optional `required_fields` list for strict schema-vs-data checking.
 - `enum-drift` — new label appears mid-file with no schema update.
 
@@ -171,7 +174,7 @@ Outputs: JSON (default), SARIF 2.1.0, self-contained HTML, `drops` (row-removal 
 
 - **MDS, WebDataset** support — Parquet landed, MDS is the remaining file format.
 - **Auto-fix on more rules** — currently only `random-seed-not-set` emits one.
-- **Nested-field schemas** — `required_fields` and per-field `field_types` ship today for top-level keys; declaring shapes for nested objects (e.g. `messages[].role: string`) is the next axis.
+- **Schemas across files** — `field_types` covers single-file paths today; pinning a single schema at the dataset level so every shard validates against it is the next axis.
 - **Per-rowgroup byte heuristic** for the parquet rule (waits for an upstream API surface).
 - **Per-language mix beyond script** — the diff reports Unicode-script mix; distinguishing English from German (both Latin) would need a model or wordlist.
 - **More MCP prompts** — `explain-rule`, `draft-fix`, and `review-corpus` ship today; further templates (e.g. a per-finding triage walkthrough) are an open follow-up.

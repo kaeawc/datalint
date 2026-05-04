@@ -143,11 +143,15 @@ rules:
       - output
 
   field-type-mismatch-with-schema:
-    field_types:            # field → JSON type (string|number|boolean|array|object|null)
+    field_types:            # path → JSON type (string|number|boolean|array|object|null)
       input: string
       output: string
       score: number
       tags: array
+      meta.author: string             # nested object: meta.author must be string
+      messages: array                 # top-level type
+      messages[].role: string         # array-each-element: every messages[i].role
+      messages[].content: string      #   …and every messages[i].content
 
   train-eval-overlap:
     prompt_field: prompt

@@ -1,0 +1,4 @@
+{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}], "meta": {"author": "alice"}}
+{"messages": [{"role": "user", "content": "x"}, {"role": 42, "content": "y"}], "meta": {"author": "bob"}}
+{"messages": [{"role": "user", "content": "y"}], "meta": {"author": 100}}
+{"messages": [{"role": "user", "content": ["multi-part"]}, {"role": "user", "content": "end"}], "meta": {"author": "dan"}}
