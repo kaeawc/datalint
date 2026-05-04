@@ -120,3 +120,22 @@ func (r RuleConfig) String(key string, def string) string {
 	}
 	return s
 }
+
+// StringSlice returns the list of strings at key, or nil if missing.
+// Non-string elements in the list are silently skipped.
+func (r RuleConfig) StringSlice(key string) []string {
+	if r.values == nil {
+		return nil
+	}
+	raw, ok := r.values[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
