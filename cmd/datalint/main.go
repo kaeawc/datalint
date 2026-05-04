@@ -32,6 +32,7 @@ func main() {
 	format := flag.String("format", "json", "output format: json, sarif, or html")
 	configPath := flag.String("config", "", "path to datalint.yml (default: discover datalint.yml or .datalint.yml in cwd)")
 	failOn := flag.String("fail-on", "none", "exit non-zero when any finding has severity >= this (none|info|warning|error)")
+	minSeverity := flag.String("min-severity", "none", "drop findings below this severity from output (none|info|warning|error); does not affect --fail-on")
 	var train, eval stringSliceFlag
 	flag.Var(&train, "train", "JSONL file in the train split (repeatable; pairs with --eval for corpus-scope rules)")
 	flag.Var(&eval, "eval", "JSONL file in the eval split (repeatable; pairs with --train for corpus-scope rules)")
@@ -57,11 +58,19 @@ func main() {
 		findings = append(findings, pipeline.RunCorpus(corpus, cfg)...)
 	}
 
-	if err := writeOutput(*format, findings); err != nil {
+	displayed, err := filterBySeverity(findings, *minSeverity)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "datalint:", err)
+		os.Exit(2)
+	}
+	if err := writeOutput(*format, displayed); err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
 		os.Exit(1)
 	}
 
+	// fail-on intentionally inspects the unfiltered set: --min-severity
+	// is a display preference, --fail-on is a CI gate. Hiding errors
+	// from output shouldn't also hide them from the gate.
 	exit, err := exitCodeForFailOn(*failOn, findings)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "datalint:", err)
@@ -109,6 +118,26 @@ func exitCodeForFailOn(level string, findings []diag.Finding) (int, error) {
 		}
 	}
 	return 0, nil
+}
+
+// filterBySeverity returns findings with severity >= the requested
+// threshold. "none" passes through unchanged. Bad levels yield an
+// error so the caller can exit with a config-error code.
+func filterBySeverity(findings []diag.Finding, level string) ([]diag.Finding, error) {
+	if level == "none" {
+		return findings, nil
+	}
+	threshold, err := parseSeverity(level)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]diag.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Severity >= threshold {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
 
 func parseSeverity(s string) (diag.Severity, error) {
