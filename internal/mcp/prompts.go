@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kaeawc/datalint/internal/rules"
 )
@@ -10,6 +11,7 @@ import (
 // promptName* are the stable identifiers exposed via prompts/list.
 const (
 	promptNameExplainRule = "explain-rule"
+	promptNameDraftFix    = "draft-fix"
 )
 
 // promptDescriptor is the MCP shape returned from prompts/list.
@@ -56,6 +58,17 @@ func (s *Server) respondPromptsList(m *Message) error {
 				},
 			},
 		},
+		{
+			Name:        promptNameDraftFix,
+			Description: "Have the model draft a concrete patch for a finding (rule + path + optional row/line/message).",
+			Arguments: []promptArgument{
+				{Name: "rule_id", Description: "The rule ID the finding fired (e.g. random-seed-not-set).", Required: true},
+				{Name: "path", Description: "The file the finding cites (Python source for code rules, JSONL for data rules).", Required: true},
+				{Name: "line", Description: "1-based source line for code findings (optional).", Required: false},
+				{Name: "row", Description: "1-based row index for data findings (optional).", Required: false},
+				{Name: "message", Description: "The finding's message text (optional; helps the model phrase the patch).", Required: false},
+			},
+		},
 	}
 	body, err := json.Marshal(map[string]any{"prompts": prompts})
 	if err != nil {
@@ -74,44 +87,65 @@ func (s *Server) respondPromptsGet(m *Message) error {
 	if err := json.Unmarshal(m.Params, &p); err != nil {
 		return s.respond(m, nil, &RPCError{Code: -32602, Message: "invalid params: " + err.Error()})
 	}
-	if p.Name != promptNameExplainRule {
-		return s.respond(m, nil, &RPCError{
-			Code:    -32601,
-			Message: fmt.Sprintf("unknown prompt: %q", p.Name),
-		})
+	switch p.Name {
+	case promptNameExplainRule:
+		return s.handleExplainRule(m, p.Arguments)
+	case promptNameDraftFix:
+		return s.handleDraftFix(m, p.Arguments)
 	}
-	ruleID, ok := p.Arguments["rule_id"]
-	if !ok || ruleID == "" {
-		return s.respond(m, nil, &RPCError{
-			Code:    -32602,
-			Message: "missing required argument: rule_id",
-		})
-	}
-	rule := rules.ByID(ruleID)
-	if rule == nil {
-		return s.respond(m, nil, &RPCError{
-			Code:    -32602,
-			Message: fmt.Sprintf("unknown rule: %q", ruleID),
-		})
-	}
+	return s.respond(m, nil, &RPCError{
+		Code:    -32601,
+		Message: fmt.Sprintf("unknown prompt: %q", p.Name),
+	})
+}
 
+// requireRule pulls rule_id from args and looks it up in the registry,
+// returning the rule + nil on success or a ready-to-send RPCError on
+// failure. Callers respond with the error directly.
+func requireRule(args map[string]string) (*rules.Rule, *RPCError) {
+	ruleID, ok := args["rule_id"]
+	if !ok || ruleID == "" {
+		return nil, &RPCError{Code: -32602, Message: "missing required argument: rule_id"}
+	}
+	r := rules.ByID(ruleID)
+	if r == nil {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("unknown rule: %q", ruleID)}
+	}
+	return r, nil
+}
+
+func (s *Server) handleExplainRule(m *Message, args map[string]string) error {
+	rule, rpcErr := requireRule(args)
+	if rpcErr != nil {
+		return s.respond(m, nil, rpcErr)
+	}
+	return s.respondPromptResult(m, fmt.Sprintf("Explain the %s datalint rule.", rule.ID),
+		explainRuleSystemPrompt, explainRuleUserPrompt(rule))
+}
+
+func (s *Server) handleDraftFix(m *Message, args map[string]string) error {
+	rule, rpcErr := requireRule(args)
+	if rpcErr != nil {
+		return s.respond(m, nil, rpcErr)
+	}
+	path := args["path"]
+	if path == "" {
+		return s.respond(m, nil, &RPCError{Code: -32602, Message: "missing required argument: path"})
+	}
+	return s.respondPromptResult(m,
+		fmt.Sprintf("Draft a fix for a %s finding at %s.", rule.ID, path),
+		draftFixSystemPrompt, draftFixUserPrompt(rule, args))
+}
+
+// respondPromptResult packages the canonical system+user pair into a
+// promptGetResult and writes it. Both prompt handlers go through here
+// so the messages array shape stays uniform.
+func (s *Server) respondPromptResult(m *Message, description, systemText, userText string) error {
 	result := promptGetResult{
-		Description: fmt.Sprintf("Explain the %s datalint rule.", ruleID),
+		Description: description,
 		Messages: []promptMessage{
-			{
-				Role: "system",
-				Content: promptContent{
-					Type: "text",
-					Text: explainRuleSystemPrompt,
-				},
-			},
-			{
-				Role: "user",
-				Content: promptContent{
-					Type: "text",
-					Text: explainRuleUserPrompt(rule),
-				},
-			},
+			{Role: "system", Content: promptContent{Type: "text", Text: systemText}},
+			{Role: "user", Content: promptContent{Type: "text", Text: userText}},
 		},
 	}
 	body, err := json.Marshal(result)
@@ -146,4 +180,37 @@ Explain this rule per the system instructions.`,
 		r.Fix,
 		scopeLabel(r),
 	)
+}
+
+const draftFixSystemPrompt = `You are a datalint fix author. Given a finding's metadata, draft a concrete patch that addresses the underlying bug:
+
+1. For code findings (.py paths), output a unified-diff-style patch. Keep the change minimal — only fix what the rule flags, no surrounding refactors.
+2. For data findings (.jsonl paths), recommend either a row replacement (with the corrected JSON) or a row removal, citing the row number.
+3. If the fix needs information you don't have (e.g., a sensible random seed value), pick a defensible default and note it.
+4. End with a one-line rationale tying the patch back to the rule's bug class.
+
+If the rule doesn't have a typical mechanical fix (e.g., role-inversion is a data quality issue with no automatic patch), say so and suggest the next step the user should take.`
+
+func draftFixUserPrompt(r *rules.Rule, args map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Rule ID: %s\n", r.ID)
+	fmt.Fprintf(&b, "Category: %s\n", r.Category)
+	fmt.Fprintf(&b, "Severity: %s\n", r.Severity)
+	fmt.Fprintf(&b, "Confidence: %s\n", r.Confidence)
+	fmt.Fprintf(&b, "Auto-fix tier: %s\n", r.Fix)
+	fmt.Fprintf(&b, "Scope: %s\n", scopeLabel(r))
+	if path := args["path"]; path != "" {
+		fmt.Fprintf(&b, "Path: %s\n", path)
+	}
+	if line := args["line"]; line != "" {
+		fmt.Fprintf(&b, "Line: %s\n", line)
+	}
+	if row := args["row"]; row != "" {
+		fmt.Fprintf(&b, "Row: %s\n", row)
+	}
+	if msg := args["message"]; msg != "" {
+		fmt.Fprintf(&b, "Message: %s\n", msg)
+	}
+	b.WriteString("\nDraft a fix per the system instructions.")
+	return b.String()
 }
